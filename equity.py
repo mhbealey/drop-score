@@ -354,7 +354,7 @@ def run_equity_scenarios(data_bundle):
         eq['month'] = eq['date'].dt.to_period('M')
         eq_monthly = eq.groupby('month')['equity'].agg(['first', 'last'])
         eq_monthly['ret'] = (eq_monthly['last'] - eq_monthly['first']) / eq_monthly['first']
-        spy_monthly = spy_close.resample('M').agg(['first', 'last'])
+        spy_monthly = spy_close.resample('ME').agg(['first', 'last'])
         spy_monthly.columns = ['first', 'last']
         spy_monthly['ret'] = (spy_monthly['last'] - spy_monthly['first']) / spy_monthly['first']
         spy_monthly.index = spy_monthly.index.to_period('M')

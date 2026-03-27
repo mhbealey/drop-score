@@ -14,8 +14,55 @@ from config import (
 from utils import strip_tz, elapsed
 
 
+GDRIVE_FOLDER_URL = 'https://drive.google.com/drive/folders/1gIGP3snLGXEOePKl58ggS9ld9XP5LrHw'
+RELEASE_BASE_URL = 'https://github.com/mhbealey/drop-score/releases/download/v17-cache'
+RELEASE_FILES = ['drop_score_cache.pkl', 'v13_intermediates.pkl']
+
+
+def _download_release_assets(cache_dir):
+    """Download cache files from GitHub release."""
+    import subprocess, sys
+    for fname in RELEASE_FILES:
+        dest = os.path.join(cache_dir, fname)
+        if os.path.exists(dest):
+            continue
+        url = f"{RELEASE_BASE_URL}/{fname}"
+        print(f"  Downloading {fname} from GitHub release...")
+        try:
+            subprocess.check_call([
+                'curl', '-L', '-f', '-o', dest, url,
+            ], timeout=600)
+            fsize = os.path.getsize(dest)
+            if fsize < 1000:
+                os.remove(dest)
+                raise RuntimeError(f"File too small ({fsize}B), download likely failed")
+            print(f"  \u2705 {fname} ({fsize/1e6:.1f} MB)")
+        except Exception as e:
+            print(f"  \u26a0\ufe0f  {fname} download failed: {e}")
+            if os.path.exists(dest):
+                os.remove(dest)
+            return False
+    return True
+
+
+def _download_gdown(cache_dir):
+    """Download cache folder from Google Drive via gdown."""
+    import subprocess, sys
+    try:
+        subprocess.check_call([
+            sys.executable, '-m', 'gdown',
+            '--folder', GDRIVE_FOLDER_URL,
+            '-O', cache_dir,
+        ])
+        print("  \u2705 gdown download complete")
+        return True
+    except Exception as e:
+        print(f"  \u26a0\ufe0f  gdown failed: {e}")
+        return False
+
+
 def setup_cache_dir():
-    """Mount Google Drive if available, else use local dir."""
+    """Mount Google Drive if available, else use local data/ dir with download fallback."""
     try:
         from google.colab import drive
         drive.mount('/content/drive', force_remount=False)
@@ -23,8 +70,19 @@ def setup_cache_dir():
         os.makedirs(cache_dir, exist_ok=True)
         print("  \u2705 Drive")
     except:
-        cache_dir = './'
-        print("  \u26a0\ufe0f  No Drive")
+        cache_dir = 'data/'
+        os.makedirs(cache_dir, exist_ok=True)
+        print("  \u26a0\ufe0f  No Drive \u2014 using local data/")
+        cache_pkl = os.path.join(cache_dir, 'drop_score_cache.pkl')
+        if not os.path.exists(cache_pkl):
+            # Try GitHub release first, then gdown, then synthetic data
+            if not _download_release_assets(cache_dir):
+                if not _download_gdown(cache_dir):
+                    print("  Generating synthetic data for testing...")
+                    import subprocess, sys
+                    subprocess.check_call([
+                        sys.executable, 'generate_synthetic_data.py',
+                    ])
     return cache_dir
 
 
