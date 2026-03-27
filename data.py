@@ -462,7 +462,8 @@ def get_sp_index_tickers():
                     tickers.update(syms)
                     print(f"    {label}: {len(syms)} tickers")
         except Exception as e:
-            print(f"    {label} scrape failed: {e}")
+            err_msg = str(e)[:100]
+            print(f"    {label} scrape failed: {err_msg}")
 
     if tickers:
         print(f"    Total S&P index: {len(tickers)} tickers")
