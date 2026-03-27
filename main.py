@@ -142,37 +142,45 @@ def holdout_eval(bundle, label):
     for tgt in targets_to_eval:
         ho_auc = np.nan
         try:
-            if (tgt in df_hold.columns
-                    and df_hold[tgt].sum() >= 10
-                    and 'vuln_score' in df_hold.columns):
-                yh = df_hold[tgt].fillna(0).astype(int)
-                hp = df_hold['vuln_score'].values
-                valid = ~np.isnan(hp)
-                if valid.sum() >= 20 and yh[valid].sum() >= 5:
-                    ho_auc = roc_auc_score(yh[valid], hp[valid])
-                    htk = df_hold['ticker'].values[valid]
-                    utk = np.unique(htk)
-                    tidx2 = {t: np.where(htk == t)[0] for t in utk}
-                    hb = []
-                    for _ in range(N_BOOT):
-                        bt2 = np.random.choice(utk, len(utk), replace=True)
-                        idx = np.concatenate([tidx2[t] for t in bt2])
-                        if (len(idx) > 0
-                                and yh.values[valid][idx].sum() > 0
-                                and yh.values[valid][idx].sum() < len(idx)):
-                            try:
-                                hb.append(roc_auc_score(yh.values[valid][idx], hp[valid][idx]))
-                            except:
-                                pass
-                    hcl = np.percentile(hb, 2.5) if hb else ho_auc
-                    hch = np.percentile(hb, 97.5) if hb else ho_auc
-                    dev_auc = v_results[tgt]['mauc']
-                    marker = " <-- TRADING" if tgt == TRADING_TARGET else ""
-                    print(f"    {tgt}: Dev={dev_auc:.3f} Hold={ho_auc:.3f} "
-                          f"[{hcl:.3f},{hch:.3f}]{marker}")
-                    results[tgt] = ho_auc
+            if tgt not in df_hold.columns:
+                print(f"    {tgt}: column not in holdout set")
+                continue
+            yh = df_hold[tgt].fillna(0).astype(int)
+            n_pos = int(yh.sum())
+            n_neg = int((yh == 0).sum())
+            n_nan = int(df_hold[tgt].isna().sum())
+            print(f"    {tgt}: events pos={n_pos} neg={n_neg} nan={n_nan}")
+            if n_pos < 20:
+                print(f"      \u26a0\ufe0f Too few events for reliable holdout AUC on {tgt}")
+            if n_pos < 10 or 'vuln_score' not in df_hold.columns:
+                continue
+            hp = df_hold['vuln_score'].values
+            valid = ~np.isnan(hp)
+            if valid.sum() >= 20 and yh[valid].sum() >= 5:
+                ho_auc = roc_auc_score(yh[valid], hp[valid])
+                htk = df_hold['ticker'].values[valid]
+                utk = np.unique(htk)
+                tidx2 = {t: np.where(htk == t)[0] for t in utk}
+                hb = []
+                for _ in range(N_BOOT):
+                    bt2 = np.random.choice(utk, len(utk), replace=True)
+                    idx = np.concatenate([tidx2[t] for t in bt2])
+                    if (len(idx) > 0
+                            and yh.values[valid][idx].sum() > 0
+                            and yh.values[valid][idx].sum() < len(idx)):
+                        try:
+                            hb.append(roc_auc_score(yh.values[valid][idx], hp[valid][idx]))
+                        except:
+                            pass
+                hcl = np.percentile(hb, 2.5) if hb else ho_auc
+                hch = np.percentile(hb, 97.5) if hb else ho_auc
+                dev_auc = v_results[tgt]['mauc']
+                marker = " <-- TRADING" if tgt == TRADING_TARGET else ""
+                print(f"    {tgt}: Dev={dev_auc:.3f} Hold={ho_auc:.3f} "
+                      f"[{hcl:.3f},{hch:.3f}]{marker}")
+                results[tgt] = ho_auc
         except Exception as e:
-            print(f"    {tgt}: error — {e}")
+            print(f"    {tgt}: error \u2014 {e}")
 
     return results
 
