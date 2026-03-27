@@ -9,9 +9,9 @@ from tqdm import tqdm
 
 from config import (
     FWD_WINDOWS, DROP_THRESH, EXCESS_THRESH,
-    MIN_EVENTS, MAX_BASE_RATE, MIN_K,
+    MIN_EVENTS, MAX_BASE_RATE, MIN_K, HOLDOUT_MO,
 )
-from utils import elapsed
+from utils import elapsed, get_col
 
 
 def recompute_outcomes(df, price_dict, spy_close):
@@ -82,11 +82,339 @@ def _outcomes(grp, pd_dict, spy_c):
     return pd.DataFrame(results)
 
 
+def _safe_div(a, b, default=np.nan):
+    """Safe division avoiding divide-by-zero."""
+    if b is None or b == 0 or np.isnan(b):
+        return default
+    return a / b
+
+
+def _safe(v, default=np.nan):
+    """Return default if v is NaN."""
+    if v is None or (isinstance(v, float) and np.isnan(v)):
+        return default
+    return float(v)
+
+
+def build_quarterly_row(tk, idx, df_inc, df_bal, df_cf, price_dict, spy_close,
+                        sector_map, sector_etf_ret):
+    """Build one quarterly feature row for a ticker at a given report index."""
+    row = {'ticker': tk}
+
+    # Get report date
+    try:
+        rd = idx[1] if isinstance(idx, tuple) else idx
+        row['report_date'] = pd.Timestamp(rd)
+    except:
+        return None
+
+    # === Income statement ===
+    rev = get_col(df_inc, idx, 'Revenue')
+    gp = get_col(df_inc, idx, 'Gross Profit')
+    oi = get_col(df_inc, idx, 'Operating Income (Loss)')
+    ni = get_col(df_inc, idx, 'Net Income')
+    ie = get_col(df_inc, idx, 'Interest Expense, Net')
+
+    # === Balance sheet ===
+    ta = get_col(df_bal, idx, 'Total Assets')
+    te = get_col(df_bal, idx, 'Total Equity')
+    tl = get_col(df_bal, idx, 'Total Liabilities')
+    td = get_col(df_bal, idx, 'Total Debt')
+    tca = get_col(df_bal, idx, 'Total Current Assets')
+    tcl = get_col(df_bal, idx, 'Total Current Liabilities')
+    cash = get_col(df_bal, idx, 'Cash, Cash Equivalents & Short Term Investments')
+    shares = get_col(df_bal, idx, 'Shares (Diluted)')
+    shares_basic = get_col(df_bal, idx, 'Shares (Basic)')
+
+    # === Cash flow ===
+    cfo = get_col(df_cf, idx, 'Net Cash from Operating Activities')
+    capex = get_col(df_cf, idx, 'Change in Fixed Assets & Intangibles')
+
+    # === Profitability ratios ===
+    row['gross_margin'] = _safe_div(gp, rev)
+    row['operating_margin'] = _safe_div(oi, rev)
+    row['net_margin'] = _safe_div(ni, rev)
+    row['roe'] = _safe_div(ni * 4, te) if not np.isnan(_safe(ni)) else np.nan  # annualized
+    row['roa'] = _safe_div(ni * 4, ta) if not np.isnan(_safe(ni)) else np.nan
+
+    # === Leverage ===
+    row['debt_to_equity'] = _safe_div(td, te)
+    row['debt_to_assets'] = _safe_div(td, ta)
+    row['current_ratio'] = _safe_div(tca, tcl)
+    row['interest_coverage'] = _safe_div(oi, abs(ie)) if not np.isnan(_safe(ie)) and ie != 0 else np.nan
+    row['liab_to_assets'] = _safe_div(tl, ta)
+    row['cash_to_assets'] = _safe_div(cash, ta)
+    row['cash_to_debt'] = _safe_div(cash, td)
+    row['net_debt'] = _safe(td, 0) - _safe(cash, 0)
+    row['net_debt_to_equity'] = _safe_div(row['net_debt'], te)
+
+    # === Cash flow ===
+    fcf = _safe(cfo, 0) - abs(_safe(capex, 0))
+    row['fcf'] = fcf
+    row['fcf_margin'] = _safe_div(fcf, rev)
+    row['cfo_to_revenue'] = _safe_div(cfo, rev)
+    row['capex_to_revenue'] = _safe_div(abs(_safe(capex, 0)), rev)
+    row['fcf_to_debt'] = _safe_div(fcf, td)
+    row['accruals'] = _safe_div(_safe(ni, 0) - _safe(cfo, 0), ta)
+
+    # === Per-share metrics ===
+    sh = _safe(shares, _safe(shares_basic, np.nan))
+    row['eps'] = _safe_div(ni, sh)
+    row['bvps'] = _safe_div(te, sh)
+    row['rev_per_share'] = _safe_div(rev, sh)
+    row['fcf_per_share'] = _safe_div(fcf, sh)
+
+    # === Share dilution ===
+    row['shares'] = sh
+    row['dilution'] = _safe_div(
+        _safe(shares, 0) - _safe(shares_basic, 0),
+        _safe(shares_basic, 1)
+    )
+
+    # === Size ===
+    row['log_assets'] = np.log1p(_safe(ta, 0))
+    row['log_revenue'] = np.log1p(_safe(rev, 0))
+
+    # === Price-based features (at report date) ===
+    if tk in price_dict:
+        pxd = price_dict[tk]
+        px = pxd['Close'] if 'Close' in pxd.columns else pxd.iloc[:, 0]
+        vol_col = pxd['Volume'] if 'Volume' in pxd.columns else None
+        rd = row['report_date']
+        vi = px.index[px.index >= rd]
+        if len(vi) > 0:
+            si = px.index.get_loc(vi[0])
+            price = float(px.iloc[si])
+            row['price'] = price
+
+            # Market cap
+            row['market_cap'] = price * _safe(sh, 0)
+
+            # Average volume (30d)
+            if vol_col is not None and si >= 30:
+                avg_vol = float(vol_col.iloc[max(0, si-30):si].mean())
+                row['avg_vol'] = avg_vol
+                row['dollar_volume'] = avg_vol * price
+
+            # Momentum features
+            dr = px.pct_change()
+            for lb, lbl in [(5, '5d'), (21, '21d'), (63, '63d'), (126, '126d'), (252, '252d')]:
+                if si >= lb:
+                    row[f'mom_{lbl}'] = float(px.iloc[si] / px.iloc[si - lb] - 1)
+
+            # Volatility
+            if si >= 30:
+                row['vol_30d'] = float(dr.iloc[max(0, si-30):si].std() * np.sqrt(252))
+            if si >= 60:
+                row['vol_60d'] = float(dr.iloc[max(0, si-60):si].std() * np.sqrt(252))
+            if si >= 252:
+                row['vol_252d'] = float(dr.iloc[max(0, si-252):si].std() * np.sqrt(252))
+
+            # Relative vol (short vs long)
+            if si >= 60:
+                v30 = dr.iloc[max(0, si-30):si].std()
+                v60 = dr.iloc[max(0, si-60):si].std()
+                row['vol_ratio_30_60'] = _safe_div(v30, v60)
+
+            # Max drawdown 63d
+            if si >= 63:
+                window = px.iloc[max(0, si-63):si+1]
+                running_max = window.cummax()
+                dd = (window - running_max) / running_max
+                row['max_dd_63d'] = float(dd.min())
+
+            # Distance from 52w high/low
+            if si >= 252:
+                h52 = float(px.iloc[max(0, si-252):si+1].max())
+                l52 = float(px.iloc[max(0, si-252):si+1].min())
+                row['dist_52w_high'] = (price - h52) / h52 if h52 > 0 else np.nan
+                row['dist_52w_low'] = (price - l52) / l52 if l52 > 0 else np.nan
+
+            # Volume trend
+            if vol_col is not None and si >= 60:
+                v30_avg = float(vol_col.iloc[max(0, si-30):si].mean())
+                v60_avg = float(vol_col.iloc[max(0, si-60):si].mean())
+                row['vol_trend'] = _safe_div(v30_avg, v60_avg)
+
+            # Valuation ratios (price-based)
+            if price > 0 and sh > 0:
+                row['earnings_yield'] = _safe_div(ni * 4, price * sh)
+                row['book_to_price'] = _safe_div(te, price * sh)
+                row['sales_to_price'] = _safe_div(rev * 4, price * sh)
+                row['fcf_yield'] = _safe_div(fcf * 4, price * sh)
+
+            # Beta (vs SPY)
+            if spy_close is not None and si >= 63:
+                try:
+                    stk_ret = dr.iloc[max(0, si-252):si]
+                    spy_ret_aligned = spy_close.pct_change().reindex(stk_ret.index)
+                    valid = stk_ret.notna() & spy_ret_aligned.notna()
+                    if valid.sum() >= 60:
+                        cov = np.cov(stk_ret[valid].values, spy_ret_aligned[valid].values)
+                        row['beta'] = cov[0, 1] / cov[1, 1] if cov[1, 1] > 0 else np.nan
+                except:
+                    pass
+
+    # === Sector ===
+    row['sector'] = sector_map.get(tk, 'Other')
+
+    # === Sector-relative momentum ===
+    sec = row['sector']
+    if sec in sector_etf_ret and tk in price_dict:
+        try:
+            pxd = price_dict[tk]
+            px = pxd['Close'] if 'Close' in pxd.columns else pxd.iloc[:, 0]
+            rd = row['report_date']
+            vi = px.index[px.index >= rd]
+            if len(vi) > 0:
+                si = px.index.get_loc(vi[0])
+                sec_ret = sector_etf_ret.get(sec)
+                if sec_ret is not None and si >= 63:
+                    stk_63 = float(px.iloc[si] / px.iloc[si-63] - 1)
+                    sec_idx = sec_ret.index[sec_ret.index <= px.index[si]]
+                    if len(sec_idx) >= 63:
+                        sec_63 = float((1 + sec_ret.loc[sec_idx[-63:]]).prod() - 1)
+                        row['sector_rel_mom_63d'] = stk_63 - sec_63
+        except:
+            pass
+
+    return row
+
+
+def build_features_from_scratch(data_bundle):
+    """Build quarterly features from SimFin + price data when no cached intermediates exist."""
+    print("FEATURES: building from scratch...")
+
+    df_inc = data_bundle['df_inc']
+    df_bal = data_bundle['df_bal']
+    df_cf = data_bundle['df_cf']
+    price_dict = data_bundle['price_dict']
+    spy_close = data_bundle['spy_close']
+    sector_map = data_bundle['sector_map']
+    sector_etf_ret = data_bundle['sector_etf_ret']
+    universe = data_bundle['universe']
+    intermediates_path = data_bundle['intermediates_path']
+
+    # Build quarterly feature rows
+    rows = []
+    for tk in tqdm(universe, desc="  Building features"):
+        if tk not in df_inc.index.get_level_values('Ticker'):
+            continue
+        tk_inc = df_inc.loc[tk]
+        for report_date in tk_inc.index:
+            idx = (tk, report_date)
+            try:
+                r = build_quarterly_row(
+                    tk, idx, df_inc, df_bal, df_cf, price_dict,
+                    spy_close, sector_map, sector_etf_ret,
+                )
+                if r is not None:
+                    rows.append(r)
+            except Exception:
+                continue
+
+    df_q = pd.DataFrame(rows)
+    print(f"  Raw quarterly rows: {len(df_q):,}")
+
+    if len(df_q) == 0:
+        print("  ERROR: No features built")
+        sys.exit(1)
+
+    # === YoY growth features (need groupby ticker, sorted by date) ===
+    df_q = df_q.sort_values(['ticker', 'report_date']).reset_index(drop=True)
+    for col, name in [('gross_margin', 'gm'), ('operating_margin', 'om'),
+                       ('net_margin', 'nm'), ('eps', 'eps'), ('rev_per_share', 'rps')]:
+        if col in df_q.columns:
+            df_q[f'{name}_chg_4q'] = df_q.groupby('ticker')[col].transform(
+                lambda x: x - x.shift(4)
+            )
+
+    # Revenue growth YoY
+    if 'rev_per_share' in df_q.columns:
+        df_q['rev_growth_yoy'] = df_q.groupby('ticker')['rev_per_share'].transform(
+            lambda x: x / x.shift(4) - 1
+        )
+
+    # Earnings growth YoY
+    if 'eps' in df_q.columns:
+        df_q['eps_growth_yoy'] = df_q.groupby('ticker')['eps'].transform(
+            lambda x: x / x.shift(4) - 1
+        )
+
+    # Sequential (QoQ) changes
+    for col in ['gross_margin', 'operating_margin', 'net_margin', 'current_ratio',
+                'debt_to_equity', 'accruals']:
+        if col in df_q.columns:
+            df_q[f'{col}_qoq'] = df_q.groupby('ticker')[col].transform(
+                lambda x: x - x.shift(1)
+            )
+
+    # Share dilution YoY
+    if 'shares' in df_q.columns:
+        df_q['share_chg_yoy'] = df_q.groupby('ticker')['shares'].transform(
+            lambda x: x / x.shift(4) - 1
+        )
+
+    # === Interaction features ===
+    if 'mom_63d' in df_q.columns and 'accruals' in df_q.columns:
+        df_q['mom_x_accruals'] = df_q['mom_63d'] * df_q['accruals']
+    if 'mom_63d' in df_q.columns and 'vol_30d' in df_q.columns:
+        df_q['mom_x_vol'] = df_q['mom_63d'] * df_q['vol_30d']
+    if 'earnings_yield' in df_q.columns and 'mom_63d' in df_q.columns:
+        df_q['ey_x_mom'] = df_q['earnings_yield'] * df_q['mom_63d']
+    if 'fcf_yield' in df_q.columns and 'debt_to_equity' in df_q.columns:
+        df_q['fcf_x_leverage'] = df_q['fcf_yield'] * df_q['debt_to_equity']
+
+    # === Clean infinities ===
+    numeric_cols = df_q.select_dtypes(include=[np.number]).columns
+    df_q[numeric_cols] = df_q[numeric_cols].replace([np.inf, -np.inf], np.nan)
+
+    # === Clip extreme values ===
+    for col in numeric_cols:
+        if col in ('price', 'market_cap', 'avg_vol', 'dollar_volume', 'shares',
+                   'fcf', 'net_debt'):
+            continue
+        q01 = df_q[col].quantile(0.01)
+        q99 = df_q[col].quantile(0.99)
+        df_q[col] = df_q[col].clip(q01, q99)
+
+    # === Filter: need price and report_date ===
+    df_q = df_q.dropna(subset=['price', 'report_date']).reset_index(drop=True)
+    print(f"  After filtering: {len(df_q):,} rows, {df_q['ticker'].nunique()} tickers")
+
+    # === Dev / Holdout split ===
+    cutoff = df_q['report_date'].max() - pd.DateOffset(months=HOLDOUT_MO)
+    df_dev = df_q[df_q['report_date'] < cutoff].copy().reset_index(drop=True)
+    df_hold = df_q[df_q['report_date'] >= cutoff].copy().reset_index(drop=True)
+    print(f"  Dev: {len(df_dev):,} | Hold: {len(df_hold):,} (cutoff: {cutoff.date()})")
+
+    # === Compute outcomes ===
+    print("  Computing outcomes...")
+    df_dev = recompute_outcomes(df_dev, price_dict, spy_close)
+    df_hold = recompute_outcomes(df_hold, price_dict, spy_close)
+
+    # === Build daily dataframe (stub for compatibility) ===
+    df_daily = pd.DataFrame()
+
+    # === Save intermediates ===
+    try:
+        with open(intermediates_path, 'wb') as f:
+            pickle.dump({
+                'df_q': df_q, 'df_dev': df_dev,
+                'df_hold': df_hold, 'df_daily': df_daily,
+            }, f)
+        print(f"  Saved intermediates to {intermediates_path}")
+    except Exception as e:
+        print(f"  Warning: could not save intermediates: {e}")
+
+    return df_q, df_dev, df_hold, df_daily
+
+
 def prepare_features(data_bundle):
     """
-    Process cached intermediates: identify feature / outcome columns,
-    recompute voladj outcomes if missing, select targets.
-    Returns updated data_bundle with feature metadata.
+    Process cached intermediates or build from scratch.
+    Identify feature / outcome columns, recompute voladj outcomes if missing,
+    select targets. Returns updated data_bundle with feature metadata.
     """
     t0 = time.time()
     meta = {'ticker', 'report_date', 'price', 'avg_vol', 'market_cap', 'sector',
@@ -102,8 +430,43 @@ def prepare_features(data_bundle):
     spy_close = data_bundle['spy_close']
     intermediates_path = data_bundle['intermediates_path']
 
-    if intm_loaded:
-        print("FEATURES: cached \u2705")
+    if not intm_loaded:
+        # Build features from scratch
+        df_q, df_dev, df_hold, df_daily = build_features_from_scratch(data_bundle)
+        data_bundle['df_q'] = df_q
+        data_bundle['df_dev'] = df_dev
+        data_bundle['df_hold'] = df_hold
+        data_bundle['df_daily'] = df_daily
+        data_bundle['intm_loaded'] = True
+
+    print("FEATURES: processing...")
+    ocols = set(c for c in df_dev.columns if any(c.startswith(p) for p in opfx))
+    fcols_q = sorted([
+        c for c in df_dev.columns
+        if c not in meta and c not in ocols
+        and df_dev[c].dtype in ('float64', 'int64', 'float32', 'int32')
+    ])
+    fill_meds_q = df_dev[fcols_q].median()
+    has_voladj = any(c.startswith('voladj_') for c in df_dev.columns)
+    if not has_voladj:
+        print("  Recomputing outcomes (voladj)...")
+        old_oc = [c for c in df_dev.columns
+                  if any(c.startswith(p) for p in opfx) and c not in fcols_q]
+        df_dev.drop(columns=old_oc, inplace=True, errors='ignore')
+        df_hold.drop(columns=old_oc, inplace=True, errors='ignore')
+        for lbl, dft_name in [('Dev', 'df_dev'), ('Hold', 'df_hold')]:
+            dft = df_dev if dft_name == 'df_dev' else df_hold
+            chunks = []
+            for tk, grp in tqdm(dft.groupby('ticker'), desc=f"  {lbl}"):
+                c = _outcomes(grp, price_dict, spy_close)
+                if len(c) > 0:
+                    chunks.append(c)
+            if chunks:
+                odf = pd.concat(chunks, ignore_index=True).set_index('_idx')
+                if lbl == 'Dev':
+                    df_dev = df_dev.join(odf, how='inner')
+                else:
+                    df_hold = df_hold.join(odf, how='inner')
         ocols = set(c for c in df_dev.columns if any(c.startswith(p) for p in opfx))
         fcols_q = sorted([
             c for c in df_dev.columns
@@ -111,47 +474,17 @@ def prepare_features(data_bundle):
             and df_dev[c].dtype in ('float64', 'int64', 'float32', 'int32')
         ])
         fill_meds_q = df_dev[fcols_q].median()
-        has_voladj = any(c.startswith('voladj_') for c in df_dev.columns)
-        if not has_voladj:
-            print("  Recomputing outcomes (voladj)...")
-            old_oc = [c for c in df_dev.columns
-                      if any(c.startswith(p) for p in opfx) and c not in fcols_q]
-            df_dev.drop(columns=old_oc, inplace=True, errors='ignore')
-            df_hold.drop(columns=old_oc, inplace=True, errors='ignore')
-            for lbl, dft_name in [('Dev', 'df_dev'), ('Hold', 'df_hold')]:
-                dft = df_dev if dft_name == 'df_dev' else df_hold
-                chunks = []
-                for tk, grp in tqdm(dft.groupby('ticker'), desc=f"  {lbl}"):
-                    c = _outcomes(grp, price_dict, spy_close)
-                    if len(c) > 0:
-                        chunks.append(c)
-                if chunks:
-                    odf = pd.concat(chunks, ignore_index=True).set_index('_idx')
-                    if lbl == 'Dev':
-                        df_dev = df_dev.join(odf, how='inner')
-                    else:
-                        df_hold = df_hold.join(odf, how='inner')
-            ocols = set(c for c in df_dev.columns if any(c.startswith(p) for p in opfx))
-            fcols_q = sorted([
-                c for c in df_dev.columns
-                if c not in meta and c not in ocols
-                and df_dev[c].dtype in ('float64', 'int64', 'float32', 'int32')
-            ])
-            fill_meds_q = df_dev[fcols_q].median()
-            try:
-                with open(intermediates_path, 'wb') as f:
-                    pickle.dump({
-                        'df_q': df_q, 'df_dev': df_dev,
-                        'df_hold': df_hold, 'df_daily': df_daily,
-                    }, f)
-                print("  \u2705 Cached voladj to Drive")
-            except:
-                pass
-    else:
-        print("  \u26a0\ufe0f  No intermediates \u2014 run v15/v16 first")
-        sys.exit(1)
+        try:
+            with open(intermediates_path, 'wb') as f:
+                pickle.dump({
+                    'df_q': df_q, 'df_dev': df_dev,
+                    'df_hold': df_hold, 'df_daily': df_daily,
+                }, f)
+            print("  Cached voladj")
+        except:
+            pass
 
-    # Target selection: most relevant targets
+    # Target selection
     all_tgt = [
         c for c in df_dev.columns
         if (c.startswith('exdrop_') or c.startswith('drop_') or c.startswith('voladj_'))
@@ -159,7 +492,6 @@ def prepare_features(data_bundle):
     ]
     tgt_rates = {c: df_dev[c].mean() for c in all_tgt}
     all_viable = [c for c in all_tgt if tgt_rates[c] <= MAX_BASE_RATE]
-    # Keep: all excess, all voladj, top 3 raw drops by events
     ex_tgts = sorted([c for c in all_viable if c.startswith('exdrop_')])
     va_tgts = sorted([c for c in all_viable if c.startswith('voladj_')])
     raw_tgts = sorted(
