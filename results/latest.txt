@@ -11,11 +11,11 @@ DATA...
   Universe: 2759 raw -> 2731 (excl 28 financial)
   All 960 prices cached
   Training: 960 stocks | Tradeable: 630 for walk-forward (330 delisted with history)
-  [0m12s]
+  [0m13s]
 
 FEATURES: processing...
   Dev: 15,163 | Hold: 2,639 | Training 26 targets (13 ex, 10 va, 3 raw)
-  [0s] [0m12s]
+  [0s] [0m13s]
 
 
 ######################################################################
@@ -29,21 +29,21 @@ VULNERABILITY MODEL...
 
   RESULTS:
     EXCESS:
-      exdrop_15_5d                   AUC:0.801 [0.746,0.808] BR:2% ◄
-      exdrop_15_10d                  AUC:0.791 [0.771,0.811] BR:6%
+      exdrop_15_5d                   AUC:0.801 [0.744,0.813] BR:2% ◄
+      exdrop_15_10d                  AUC:0.791 [0.770,0.814] BR:6%
       exdrop_10_5d                   AUC:0.764 [0.739,0.784] BR:6%
       exdrop_10_10d                  AUC:0.761 [0.740,0.775] BR:12%
-      exdrop_15_21d                  AUC:0.749 [0.726,0.766] BR:12%
+      exdrop_15_21d                  AUC:0.749 [0.725,0.765] BR:12%
     VOL-ADJ:
-      voladj_2sig_63d                AUC:0.762 [0.724,0.799] BR:3%
-      voladj_2sig_42d                AUC:0.714 [0.678,0.750] BR:3%
-      voladj_1sig_63d                AUC:0.680 [0.661,0.697] BR:13%
-      voladj_2sig_10d                AUC:0.676 [0.625,0.716] BR:3%
-      voladj_1sig_42d                AUC:0.671 [0.651,0.688] BR:15%
+      voladj_2sig_63d                AUC:0.762 [0.724,0.801] BR:3%
+      voladj_2sig_42d                AUC:0.714 [0.671,0.752] BR:3%
+      voladj_1sig_63d                AUC:0.680 [0.658,0.696] BR:13%
+      voladj_2sig_10d                AUC:0.676 [0.624,0.715] BR:3%
+      voladj_1sig_42d                AUC:0.671 [0.650,0.688] BR:15%
     RAW:
-      drop_5_21d                     AUC:0.696 [0.682,0.711] BR:30%
-      drop_5_63d                     AUC:0.695 [0.681,0.707] BR:38%
-      drop_5_42d                     AUC:0.688 [0.672,0.701] BR:35%
+      drop_5_21d                     AUC:0.696 [0.680,0.712] BR:30%
+      drop_5_63d                     AUC:0.695 [0.681,0.708] BR:38%
+      drop_5_42d                     AUC:0.688 [0.674,0.703] BR:35%
   BEST: exdrop_15_5d | 0.801 | K=10
   Features: ['roa', 'eps', 'vol_60d', 'log_revenue', 'vol_30d', 'earnings_yield', 'cfo_to_revenue', 'gross_margin', 'cash_to_assets', 'sales_to_price']
 
@@ -88,7 +88,7 @@ WALK-FORWARD: exdrop_15_10d / 21d hold / confirmed entry
 
   Profitable quarters: 5/10
   Trades: 297 total, 75 top-25%
-  [5s] [2m16s]
+  [5s] [2m17s]
 
 ======================================================================
 EQUITY CURVES + DYNAMIC REGIME
@@ -148,7 +148,7 @@ DIAGNOSTICS
     Downloading earnings dates for 60 tickers...
     Got dates for 0 tickers
     No earnings dates available
-  [4s] [2m25s]
+  [2s] [2m24s]
 
 
   HOLDOUT (Full SimFin):
@@ -174,21 +174,21 @@ VULNERABILITY MODEL...
 
   RESULTS:
     EXCESS:
-      exdrop_15_5d                   AUC:0.706 [0.559,0.865] BR:2% ◄
-      exdrop_10_5d                   AUC:0.667 [0.617,0.736] BR:6%
+      exdrop_15_5d                   AUC:0.706 [0.558,0.875] BR:2% ◄
+      exdrop_10_5d                   AUC:0.667 [0.614,0.744] BR:6%
       exdrop_10_10d                  AUC:0.657 [0.600,0.704] BR:12%
-      exdrop_15_10d                  AUC:0.645 [0.573,0.707] BR:6%
-      exdrop_15_42d                  AUC:0.629 [0.592,0.665] BR:22%
+      exdrop_15_10d                  AUC:0.645 [0.578,0.701] BR:6%
+      exdrop_15_42d                  AUC:0.629 [0.588,0.670] BR:22%
     VOL-ADJ:
-      voladj_2sig_63d                AUC:0.678 [0.606,0.751] BR:3%
-      voladj_1sig_63d                AUC:0.668 [0.626,0.710] BR:13%
-      voladj_2sig_42d                AUC:0.661 [0.588,0.756] BR:3%
-      voladj_2sig_10d                AUC:0.655 [0.545,0.724] BR:3%
-      voladj_2sig_21d                AUC:0.626 [0.593,0.706] BR:3%
+      voladj_2sig_63d                AUC:0.678 [0.613,0.751] BR:3%
+      voladj_1sig_63d                AUC:0.668 [0.622,0.711] BR:13%
+      voladj_2sig_42d                AUC:0.661 [0.591,0.754] BR:3%
+      voladj_2sig_10d                AUC:0.655 [0.536,0.728] BR:3%
+      voladj_2sig_21d                AUC:0.626 [0.596,0.704] BR:3%
     RAW:
-      drop_5_63d                     AUC:0.682 [0.654,0.713] BR:38%
-      drop_5_21d                     AUC:0.664 [0.632,0.693] BR:30%
-      drop_5_42d                     AUC:0.654 [0.625,0.687] BR:35%
+      drop_5_63d                     AUC:0.682 [0.654,0.708] BR:38%
+      drop_5_21d                     AUC:0.664 [0.635,0.693] BR:30%
+      drop_5_42d                     AUC:0.654 [0.624,0.681] BR:35%
   BEST: exdrop_15_5d | 0.706 | K=10
   Features: ['rev_per_share', 'cash_to_assets', 'net_margin', 'operating_margin', 'log_assets', 'log_revenue', 'sales_to_price', 'net_debt_to_equity', 'vol_30d', 'current_ratio']
 
@@ -201,7 +201,7 @@ VULNERABILITY MODEL...
 
   TRUNCATED HOLDOUT TEST:
 
-  Flagged: 48 | [3m30s]
+  Flagged: 48 | [3m28s]
 
 ======================================================================
 WALK-FORWARD: exdrop_15_10d / 21d hold / confirmed entry
@@ -234,7 +234,7 @@ WALK-FORWARD: exdrop_15_10d / 21d hold / confirmed entry
 
   Profitable quarters: 6/12
   Trades: 505 total, 127 top-25%
-  [4s] [3m33s]
+  [4s] [3m32s]
 
 ======================================================================
 EQUITY CURVES + DYNAMIC REGIME
@@ -280,7 +280,7 @@ EQUITY CURVES + DYNAMIC REGIME
       2024Q1: $   6,984 (Q P&L $+677, size $3,050)
       2024Q2: $   6,456 (Q P&L $-528, size $3,812)
       2024Q3: $   6,097 (Q P&L $-359, size $3,812)
-  [10s] [3m43s]
+  [10s] [3m42s]
 
 ======================================================================
 DIAGNOSTICS
@@ -299,7 +299,7 @@ DIAGNOSTICS
     Downloading earnings dates for 67 tickers...
     Got dates for 0 tickers
     No earnings dates available
-  [6s] [3m49s]
+  [4s] [3m45s]
 
 
   HOLDOUT (S&P 400+600):
@@ -307,9 +307,9 @@ DIAGNOSTICS
       ⚠️ Too few events for reliable holdout AUC on exdrop_15_5d
     exdrop_15_10d: events pos=17 neg=742 nan=0
       ⚠️ Too few events for reliable holdout AUC on exdrop_15_10d
-    exdrop_15_10d: Dev=0.645 Hold=0.565 [0.409,0.717] <-- TRADING
+    exdrop_15_10d: Dev=0.645 Hold=0.565 [0.409,0.713] <-- TRADING
     voladj_2sig_63d: events pos=43 neg=716 nan=0
-    voladj_2sig_63d: Dev=0.678 Hold=0.466 [0.385,0.553]
+    voladj_2sig_63d: Dev=0.678 Hold=0.466 [0.385,0.563]
 
 ======================================================================
 VOLADJ COLLAPSE DIAGNOSTIC
@@ -350,7 +350,7 @@ HEAD-TO-HEAD COMPARISON
 ██████████████████████████████████████████████████████████████████████
 
 DATA: 960 stocks | 15,163 dev + 2,639 hold
-VULN: exdrop_15_5d Dev=0.801 [0.746,0.808]
+VULN: exdrop_15_5d Dev=0.801 [0.744,0.813]
 TRADING: exdrop_15_10d Hold=0.777 (holdout on trading target)
 Features: ['roa', 'eps', 'vol_60d', 'log_revenue', 'vol_30d', 'earnings_yield', 'cfo_to_revenue', 'gross_margin', 'cash_to_assets', 'sales_to_price']
 VOL-ADJUSTED: voladj_2sig_63d AUC=0.762
@@ -393,7 +393,7 @@ FIRST 20 TRADES (top-25% conviction):
   BW     2021-10-06 $     6→$     7 STOP $-0.97/sh (-15.6%) borrow=$0.03
   OIS    2021-10-06 $     6→$     7 EXP  $-0.32/sh (-5.1%) borrow=$0.03
 
-Total: 4.1 min
+Total: 4.0 min
 Drop Score v18 complete.
 
-Log saved to results/run_2026-03-27_202551.txt
+Log saved to results/run_2026-03-27_203405.txt
