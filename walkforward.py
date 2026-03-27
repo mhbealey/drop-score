@@ -1,7 +1,7 @@
 """
-Walk-forward backtest with matched target/hold periods,
+Walk-forward backtest locked to TRADING_TARGET configuration,
 confirmation entry, rule-based filters, sector cap, regime filter,
-and conviction tiers.
+volume-based borrow costs, and conviction tiers.
 """
 import time
 import numpy as np
@@ -13,25 +13,16 @@ from tqdm import tqdm
 from config import (
     VOL_FLOOR, SECTOR_CAP, REGIME_SPY_MAX, REGIME_VIX_MIN,
     SLIPPAGE, STOP_LOSS, PROFIT_TARGET, TRAILING_STOP,
-    SKIP_RET5D_DOWN, SKIP_VOL_PCT, ENTRY_DELAY, FORCE_TARGET,
+    SKIP_RET5D_DOWN, SKIP_VOL_PCT, ENTRY_DELAY,
+    TRADING_TARGET, TRADING_HOLD, ENTRY_MODE,
+    CONFIRMATION_DROP, CONFIRMATION_WINDOW,
+    BORROW_RATE_EASY, BORROW_RATE_HARD,
 )
 from utils import clean_X, elapsed, to_scalar, ensure_series
 
 
-# Walk-forward configurations: (target, hold_days)
-WF_CONFIGS = [
-    ('voladj_2sig_63d', 63),
-    ('exdrop_15_10d', 21),
-    ('voladj_2sig_42d', 42),
-]
-
-
 def _process_quarters(data_bundle, wf_tgt):
-    """Train WF-internal models per quarter and return scored picks.
-
-    This is the expensive part (model training). Called once per target,
-    then _generate_trades runs twice (immediate + confirmed) reusing results.
-    """
+    """Train WF-internal models per quarter and return scored picks."""
     df_dev = data_bundle['df_dev']
     fcols_q = data_bundle['fcols_q']
     fill_meds_q = data_bundle['fill_meds_q']
@@ -122,12 +113,9 @@ def _generate_trades(scored_quarters, hold_days, price_dict,
                      use_confirmation=False, tradeable_tickers=None):
     """Generate trades from scored picks with specific hold period and entry mode.
 
-    Args:
-        scored_quarters: list of (quarter, picks_df) from _process_quarters
-        hold_days: max hold period in trading days (matched to target window)
-        price_dict: ticker -> price DataFrame
-        use_confirmation: if True, wait for 2% drop within 5 days before entering
-        tradeable_tickers: if set, only generate trades for these tickers
+    Borrow costs are volume-based:
+        avg_vol >= 1M  -> BORROW_RATE_EASY (3% annual)
+        avg_vol < 1M   -> BORROW_RATE_HARD (6% annual)
     """
     all_trades = []
 
@@ -137,7 +125,6 @@ def _generate_trades(scored_quarters, hold_days, price_dict,
             pr = row.get('price', np.nan)
             if pd.isna(pr) or pr <= 0 or tk not in price_dict:
                 continue
-            # Only trade currently-listed stocks in walk-forward
             if tradeable_tickers is not None and tk not in tradeable_tickers:
                 continue
 
@@ -149,21 +136,19 @@ def _generate_trades(scored_quarters, hold_days, price_dict,
             si = px2.index.get_loc(vi[0])
 
             if use_confirmation:
-                # Wait up to 5 trading days for a 2% decline from signal day's close
                 signal_price = to_scalar(px2.iloc[si])
                 if signal_price <= 0:
                     continue
                 confirm_si = None
-                for ci in range(si + 1, min(si + 6, len(px2))):
+                for ci in range(si + 1, min(si + CONFIRMATION_WINDOW + 1, len(px2))):
                     day_price = to_scalar(px2.iloc[ci])
-                    if (day_price - signal_price) / signal_price <= -0.02:
+                    if (day_price - signal_price) / signal_price <= -CONFIRMATION_DROP:
                         confirm_si = ci
                         break
                 if confirm_si is None:
-                    continue  # Not confirmed within 5 days, skip
+                    continue
                 si_entry = confirm_si
             else:
-                # Standard 1-day entry delay
                 si_entry = si + ENTRY_DELAY
 
             if si_entry >= len(px2):
@@ -219,12 +204,15 @@ def _generate_trades(scored_quarters, hold_days, price_dict,
             if not stopped and not profit_taken:
                 exit_p = path[-1] * (1 + SLIPPAGE)
 
-            mcap = row.get('market_cap', np.nan)
-            br = (0.02 if pd.notna(mcap) and mcap > 10e9
-                  else 0.04 if pd.notna(mcap) and mcap > 2e9
-                  else 0.08)
+            # Volume-based borrow cost
+            avg_vol = row.get('avg_vol', 0)
+            if pd.notna(avg_vol) and avg_vol >= 1_000_000:
+                br = BORROW_RATE_EASY
+            else:
+                br = BORROW_RATE_HARD
             borrow = entry_p * br * (exit_day / 252)
-            pnl = (entry_p - exit_p) - borrow
+            pnl_raw = entry_p - exit_p
+            pnl = pnl_raw - borrow
             pnl_pct = pnl / entry_p
             entry_date = px2.index[si_entry]
             exit_date = px2.index[min(si_entry + exit_day, len(px2) - 1)]
@@ -232,11 +220,12 @@ def _generate_trades(scored_quarters, hold_days, price_dict,
                 'quarter': str(test_q), 'ticker': tk,
                 'sector': row.get('sector', 'Other'),
                 'entry_price': entry_p, 'exit_price': exit_p,
-                'pnl_per_share': pnl, 'pnl_pct': pnl_pct,
+                'pnl_raw': pnl_raw, 'pnl_per_share': pnl, 'pnl_pct': pnl_pct,
+                'borrow_cost': borrow, 'borrow_rate': br,
                 'score': row['wf_score'], 'stopped': stopped,
                 'profit_taken': profit_taken,
                 'exit_days': exit_day, 'entry_date': entry_date,
-                'exit_date': exit_date, 'borrow_rate': br,
+                'exit_date': exit_date,
             })
 
     return all_trades
@@ -255,178 +244,125 @@ def _tier_stats(wf_df):
             continue
         wr = (sub['pnl_per_share'] > 0).mean()
         avg = sub['pnl_per_share'].mean()
+        avg_raw = sub['pnl_raw'].mean() if 'pnl_raw' in sub.columns else avg
         avg_pct = sub['pnl_pct'].mean() * 100
         sr = sub['stopped'].mean()
+        avg_borrow = sub['borrow_cost'].mean() if 'borrow_cost' in sub.columns else 0
         nq = wf_df['quarter'].nunique()
         tpq = len(sub) / nq if nq > 0 else 0
         tiers[tier_name] = {
             'tier': tier_name, 'n': len(sub),
-            'win': wr, 'avg_pnl': avg, 'avg_pct': avg_pct,
+            'win': wr, 'avg_pnl': avg, 'avg_raw': avg_raw,
+            'avg_pct': avg_pct, 'avg_borrow': avg_borrow,
             'stop_rate': sr, 'trades_per_q': tpq,
         }
     return tiers
 
 
 def run_walkforward(data_bundle):
-    """Run walk-forward comparison across 3 target/hold configs x 2 entry modes."""
+    """Run walk-forward locked to TRADING_TARGET / TRADING_HOLD / ENTRY_MODE."""
     t0 = time.time()
     print("=" * 70)
-    print("WALK-FORWARD (matched target/hold, immediate + confirmed entry)")
+    print(f"WALK-FORWARD: {TRADING_TARGET} / {TRADING_HOLD}d hold / {ENTRY_MODE} entry")
     print("=" * 70)
 
     v_results = data_bundle['v_results']
     price_dict = data_bundle['price_dict']
     tradeable_tickers = data_bundle.get('tradeable_tickers')
 
-    comparison = []
-    # Store results keyed by (target, entry_mode)
-    all_results = {}
+    if TRADING_TARGET not in v_results:
+        print(f"\n  ERROR: {TRADING_TARGET} not in trained targets!")
+        data_bundle.update(
+            all_wf_trades=[], wf_df=pd.DataFrame(),
+            wf_top=pd.DataFrame(), wf_comparison=[],
+        )
+        return data_bundle
 
-    for tgt, hold in WF_CONFIGS:
-        if tgt not in v_results:
-            print(f"\n  {tgt}/{hold}d: SKIPPED (target not trained)")
-            continue
+    auc = v_results[TRADING_TARGET]['mauc']
+    use_conf = (ENTRY_MODE == "confirmed")
+    print(f"\n  Target: {TRADING_TARGET} (AUC={auc:.3f})")
+    print(f"  Hold: {TRADING_HOLD}d | Entry: {ENTRY_MODE}"
+          f"{f' ({CONFIRMATION_DROP:.0%} in {CONFIRMATION_WINDOW}d)' if use_conf else ''}")
+    print(f"  Borrow: {BORROW_RATE_EASY:.0%} (easy, vol>=1M) / "
+          f"{BORROW_RATE_HARD:.0%} (hard, vol<1M)")
 
-        auc = v_results[tgt]['mauc']
-        print(f"\n  {tgt}/{hold}d (AUC={auc:.3f}):")
+    # Train models once
+    scored_quarters = _process_quarters(data_bundle, TRADING_TARGET)
 
-        # Train models once per target (expensive)
-        scored_quarters = _process_quarters(data_bundle, tgt)
+    # Generate trades
+    trades = _generate_trades(
+        scored_quarters, TRADING_HOLD, price_dict,
+        use_confirmation=use_conf,
+        tradeable_tickers=tradeable_tickers,
+    )
+    wf_df = pd.DataFrame(trades) if trades else pd.DataFrame()
 
-        for entry_mode, use_conf in [('Immediate', False), ('Confirmed', True)]:
-            trades = _generate_trades(
-                scored_quarters, hold, price_dict,
-                use_confirmation=use_conf,
-                tradeable_tickers=tradeable_tickers,
-            )
-            wf_df = pd.DataFrame(trades) if trades else pd.DataFrame()
-            all_results[(tgt, entry_mode)] = (trades, wf_df, hold)
+    if len(wf_df) < 10:
+        print(f"\n  Only {len(wf_df)} trades — too few for analysis")
+        data_bundle.update(
+            all_wf_trades=trades, wf_df=wf_df,
+            wf_top=wf_df.copy(), wf_comparison=[],
+        )
+        return data_bundle
 
-            if len(wf_df) < 10:
-                print(f"    {entry_mode}: {len(wf_df)} trades (too few)")
-                comparison.append({
-                    'target': tgt, 'hold': hold, 'entry': entry_mode,
-                    'n': len(wf_df),
-                    'top25_win': np.nan, 'top25_pnl': np.nan,
-                    'full_win': np.nan, 'full_pnl': np.nan,
-                    'stops': np.nan,
-                })
-                continue
-
-            tiers = _tier_stats(wf_df)
-            t25 = tiers.get('Top 25%', {})
-            full = tiers.get('Full', {})
-
-            row = {
-                'target': tgt, 'hold': hold, 'entry': entry_mode,
-                'n': len(wf_df),
-                'top25_win': t25.get('win', np.nan),
-                'top25_pnl': t25.get('avg_pnl', np.nan),
-                'full_win': full.get('win', np.nan),
-                'full_pnl': full.get('avg_pnl', np.nan),
-                'stops': full.get('stop_rate', np.nan),
-            }
-            comparison.append(row)
-
-            # Print tier details
-            for name in ['Top 10%', 'Top 25%', 'Top 50%', 'Full']:
-                t = tiers.get(name)
-                if t:
-                    print(f"    {entry_mode:<11} {t['tier']:<10} n={t['n']:>3} "
-                          f"win={t['win']:.0%} avg=${t['avg_pnl']:+.2f}/sh "
-                          f"({t['avg_pct']:+.1f}%) stop={t['stop_rate']:.0%}")
-
-    # ── Comparison table ──
-    print(f"\n  {'=' * 85}")
-    print(f"  COMPARISON TABLE:")
-    hdr = (f"  {'TARGET/HOLD':<28} {'Entry':<12} {'n':>4} "
-           f"{'Top25%Win':>9} {'Top25%P&L':>10} "
-           f"{'FullWin':>8} {'FullP&L':>9} {'Stops':>6}")
-    print(hdr)
-    print(f"  {'-' * 85}")
-    for row in comparison:
-        tgt_hold = f"{row['target']}/{row['hold']}d"
-        t25w = f"{row['top25_win']:.0%}" if pd.notna(row['top25_win']) else 'N/A'
-        t25p = f"${row['top25_pnl']:+.2f}" if pd.notna(row['top25_pnl']) else 'N/A'
-        fw = f"{row['full_win']:.0%}" if pd.notna(row['full_win']) else 'N/A'
-        fp = f"${row['full_pnl']:+.2f}" if pd.notna(row['full_pnl']) else 'N/A'
-        st = f"{row['stops']:.0%}" if pd.notna(row['stops']) else 'N/A'
-        print(f"  {tgt_hold:<28} {row['entry']:<12} {row['n']:>4} "
-              f"{t25w:>9} {t25p:>10} {fw:>8} {fp:>9} {st:>6}")
-    print(f"  {'=' * 85}")
-
-    # ── Select best configuration ──
-    # Primary: Confirmed entry where Top25% Win > Full Win AND Top25% P&L > 0
-    best_key = None
-    best_score = -999
-    for row in comparison:
-        if row['entry'] != 'Confirmed':
-            continue
-        t25w = row.get('top25_win', 0)
-        fw = row.get('full_win', 0)
-        t25p = row.get('top25_pnl', 0)
-        if pd.isna(t25w) or pd.isna(fw) or pd.isna(t25p):
-            continue
-        if t25w > fw and t25p > 0:
-            score = t25p  # Higher P&L = better
-            if score > best_score:
-                best_score = score
-                best_key = (row['target'], 'Confirmed')
-
-    # Fallback: best confirmed by Top25% P&L
-    if best_key is None:
-        for row in comparison:
-            if row['entry'] != 'Confirmed' or row['n'] < 10:
-                continue
-            t25p = row.get('top25_pnl', -999)
-            if pd.notna(t25p) and t25p > best_score:
-                best_score = t25p
-                best_key = (row['target'], 'Confirmed')
-
-    # Ultimate fallback: best immediate
-    if best_key is None:
-        for row in comparison:
-            if row['n'] < 10:
-                continue
-            t25p = row.get('top25_pnl', -999)
-            if pd.notna(t25p) and t25p > best_score:
-                best_score = t25p
-                best_key = (row['target'], row['entry'])
-
-    # Extract best config's trades
-    if best_key and best_key in all_results:
-        best_trades, best_wf_df, best_hold = all_results[best_key]
-        print(f"\n  SELECTED: {best_key[0]}/{best_hold}d ({best_key[1]})")
-    else:
-        best_trades = []
-        best_wf_df = pd.DataFrame()
-        print(f"\n  WARNING: No valid configuration found")
+    # Tier analysis
+    tiers = _tier_stats(wf_df)
+    print(f"\n  {'Tier':<10} {'n':>4} {'Win':>5} {'Raw$/sh':>9} {'Borw$/sh':>9} "
+          f"{'Net$/sh':>9} {'Net%':>7} {'Stops':>6}")
+    print(f"  {'-'*60}")
+    for name in ['Top 10%', 'Top 25%', 'Top 50%', 'Full']:
+        t = tiers.get(name)
+        if t:
+            print(f"  {t['tier']:<10} {t['n']:>4} {t['win']:>5.0%} "
+                  f"${t['avg_raw']:>+7.2f} ${t['avg_borrow']:>7.2f} "
+                  f"${t['avg_pnl']:>+7.2f} {t['avg_pct']:>+6.1f}% "
+                  f"{t['stop_rate']:>5.0%}")
 
     # Top-25% subset for equity curve
-    if len(best_wf_df) > 20:
-        score_25 = best_wf_df['score'].quantile(0.75)
-        wf_top = best_wf_df[best_wf_df['score'] >= score_25].copy()
+    if len(wf_df) > 20:
+        score_25 = wf_df['score'].quantile(0.75)
+        wf_top = wf_df[wf_df['score'] >= score_25].copy()
     else:
-        wf_top = best_wf_df.copy()
+        wf_top = wf_df.copy()
 
-    # Print per-quarter for selected config
+    # Per-quarter breakdown
     if len(wf_top) > 0:
-        print(f"\n  DEFAULT (Top 25%): {len(wf_top)} trades")
-        print(f"  BY QUARTER:")
+        print(f"\n  TOP 25% BY QUARTER ({len(wf_top)} trades):")
         for q in sorted(wf_top['quarter'].unique()):
             qs = wf_top[wf_top['quarter'] == q]
             if len(qs) >= 2:
+                raw_avg = qs['pnl_raw'].mean() if 'pnl_raw' in qs.columns else qs['pnl_per_share'].mean()
+                borr_avg = qs['borrow_cost'].mean() if 'borrow_cost' in qs.columns else 0
                 print(f"    {q}: n={len(qs):>3} win={(qs['pnl_per_share']>0).mean():.0%} "
-                      f"avg=${qs['pnl_per_share'].mean():+.2f}/sh "
-                      f"({qs['pnl_pct'].mean()*100:+.1f}%)")
+                      f"raw=${raw_avg:+.2f} borrow=${borr_avg:.2f} "
+                      f"net=${qs['pnl_per_share'].mean():+.2f}/sh")
 
-    print(f"\n  Trades: {len(best_wf_df)} total, {len(wf_top)} top-25%")
+    # Profitable quarters
+    q_pnl = wf_top.groupby('quarter')['pnl_per_share'].sum()
+    prof_q = (q_pnl > 0).sum()
+    total_q = len(q_pnl)
+    print(f"\n  Profitable quarters: {prof_q}/{total_q}")
+    print(f"  Trades: {len(wf_df)} total, {len(wf_top)} top-25%")
     print(f"  [{time.time()-t0:.0f}s] {elapsed()}")
     print()
 
+    # Build comparison row for main.py head-to-head
+    t25 = tiers.get('Top 25%', {})
+    full = tiers.get('Full', {})
+    comparison = [{
+        'target': TRADING_TARGET, 'hold': TRADING_HOLD,
+        'entry': ENTRY_MODE,
+        'n': len(wf_df),
+        'top25_win': t25.get('win', np.nan),
+        'top25_pnl': t25.get('avg_pnl', np.nan),
+        'full_win': full.get('win', np.nan),
+        'full_pnl': full.get('avg_pnl', np.nan),
+        'stops': full.get('stop_rate', np.nan),
+    }]
+
     data_bundle.update(
-        all_wf_trades=best_trades,
-        wf_df=best_wf_df,
+        all_wf_trades=trades,
+        wf_df=wf_df,
         wf_top=wf_top,
         wf_comparison=comparison,
     )

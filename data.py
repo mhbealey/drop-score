@@ -1,8 +1,10 @@
 """
-Data loading: SimFin fundamentals, yFinance prices, sector mapping,
-pickle caching, universe construction.
+Data loading: SimFin fundamentals, multi-source price waterfall,
+sector mapping, pickle caching, universe construction,
+training/tradeable split, S&P index tickers.
 """
-import os, time, pickle, random
+import os, time, pickle, random, json
+import urllib.request
 import simfin as sf
 import yfinance as yf
 import pandas as pd
@@ -17,40 +19,14 @@ def _patched_read_csv(*args, **kwargs):
 pd.read_csv = _patched_read_csv
 
 from config import (
-    SIMFIN_KEY, SECTOR_ETFS, FORCE_RECOMPUTE,
+    SIMFIN_KEY, FMP_KEY, SECTOR_ETFS, FORCE_RECOMPUTE, VOL_FLOOR,
 )
 from utils import strip_tz, elapsed
 
 
-
-
-def _yf_download_with_retry(tickers, max_retries=3, base_delay=5, **kwargs):
-    """Download from yFinance with retry + exponential backoff for rate limits.
-
-    Retries on YFRateLimitError / HTTP 429. Does NOT retry on 'No data found'
-    (genuinely delisted/unavailable tickers).
-    """
-    for attempt in range(max_retries):
-        try:
-            data = yf.download(tickers, **kwargs)
-            return data
-        except Exception as e:
-            err_str = str(e).lower()
-            # Only retry on rate limit errors
-            is_rate_limit = (
-                'ratelimit' in err_str
-                or '429' in err_str
-                or 'too many requests' in err_str
-            )
-            if is_rate_limit and attempt < max_retries - 1:
-                delay = base_delay * (3 ** attempt) + random.uniform(0, 2)
-                print(f"    Rate limited (attempt {attempt+1}/{max_retries}), "
-                      f"waiting {delay:.0f}s...")
-                time.sleep(delay)
-                continue
-            raise
-    return None
-
+# ═══════════════════════════════════════════════════════════════
+# Cache helpers
+# ═══════════════════════════════════════════════════════════════
 
 def setup_cache_dir():
     """Mount Google Drive if available, else use local data/ dir."""
@@ -59,8 +35,8 @@ def setup_cache_dir():
         drive.mount('/content/drive', force_remount=False)
         cache_dir = '/content/drive/MyDrive/drop_score/'
         os.makedirs(cache_dir, exist_ok=True)
-        print("  \u2705 Drive")
-    except:
+        print("  Drive mounted")
+    except Exception:
         cache_dir = 'data/'
         os.makedirs(cache_dir, exist_ok=True)
         print("  Using local data/")
@@ -78,7 +54,7 @@ def load_cache(cache_dir):
                     cache = pickle.load(f)
                 print(f"  Cache: {len(cache.get('prices', {}))} prices")
                 break
-            except:
+            except Exception:
                 continue
     return cache, cache_path
 
@@ -87,7 +63,7 @@ def save_cache(cache, cache_path):
     try:
         with open(cache_path, 'wb') as f:
             pickle.dump(cache, f)
-    except:
+    except Exception:
         pass
 
 
@@ -105,12 +81,16 @@ def load_intermediates(cache_dir, force_recompute=False):
             df_hold = intm['df_hold']
             df_daily = intm['df_daily']
             intm_loaded = True
-            print(f"  \u2705 Intermediates: {len(df_q):,}q, {len(df_daily):,}d")
+            print(f"  Intermediates: {len(df_q):,}q, {len(df_daily):,}d")
         except Exception as e:
-            print(f"  \u26a0\ufe0f  {e}")
+            print(f"  Intermediates error: {e}")
             intm_loaded = False
     return intm_loaded, df_q, df_dev, df_hold, df_daily, intermediates_path
 
+
+# ═══════════════════════════════════════════════════════════════
+# SimFin fundamentals
+# ═══════════════════════════════════════════════════════════════
 
 def load_simfin(cache, cache_path):
     """Download or load cached SimFin quarterly statements."""
@@ -161,14 +141,18 @@ def load_sector_map(cache, cache_path):
                             sector_map[tk] = 'Utilities'
                         else:
                             sector_map[tk] = 'Other'
-                    except:
+                    except Exception:
                         sector_map[tk] = 'Other'
-        except:
+        except Exception:
             pass
         cache['sector_map'] = sector_map
         save_cache(cache, cache_path)
     return sector_map
 
+
+# ═══════════════════════════════════════════════════════════════
+# Universe construction
+# ═══════════════════════════════════════════════════════════════
 
 def build_universe(df_inc, df_bal, df_cf, sector_map):
     """Build filtered stock universe (exclude Financials only)."""
@@ -187,11 +171,11 @@ def build_universe(df_inc, df_bal, df_cf, sector_map):
     return universe
 
 
-def _classify_tickers(price_dict, months_threshold=6):
-    """Classify tickers as tradeable (recent prices) vs delisted (historical only).
+def classify_tickers(price_dict, vol_floor=VOL_FLOOR, months_threshold=6):
+    """Classify tickers as tradeable vs delisted-with-history.
 
-    Delisted tickers with historical prices are kept for training
-    (survivorship bias correction) but excluded from walk-forward trade generation.
+    tradeable: recent prices (within months_threshold) AND avg volume >= vol_floor
+    delisted_with_history: has prices but not tradeable (kept for training)
     """
     cutoff = pd.Timestamp.now() - pd.DateOffset(months=months_threshold)
     tradeable = set()
@@ -202,17 +186,76 @@ def _classify_tickers(price_dict, months_threshold=6):
         if len(pxd) == 0:
             continue
         last_date = pxd.index.max()
-        if last_date >= cutoff:
-            tradeable.add(tk)
-        else:
+        if last_date < cutoff:
             delisted_with_history.add(tk)
+            continue
+        # Check volume in most recent 30 trading days
+        if 'Volume' in pxd.columns and len(pxd) >= 30:
+            avg_vol = pxd['Volume'].iloc[-30:].mean()
+            if hasattr(avg_vol, 'item'):
+                avg_vol = avg_vol.item()
+            if avg_vol < vol_floor:
+                delisted_with_history.add(tk)
+                continue
+        tradeable.add(tk)
     return tradeable, delisted_with_history
 
 
-def download_prices(universe, cache, cache_path):
-    """Download price data from yFinance, with caching, skip list, and retry."""
+# ═══════════════════════════════════════════════════════════════
+# Multi-source price waterfall
+# ═══════════════════════════════════════════════════════════════
+
+def _yf_download_with_retry(tickers, max_retries=3, base_delay=5, **kwargs):
+    """Download from yFinance with retry + exponential backoff for rate limits."""
+    for attempt in range(max_retries):
+        try:
+            data = yf.download(tickers, **kwargs)
+            return data
+        except Exception as e:
+            err_str = str(e).lower()
+            is_rate_limit = (
+                'ratelimit' in err_str
+                or '429' in err_str
+                or 'too many requests' in err_str
+            )
+            if is_rate_limit and attempt < max_retries - 1:
+                delay = base_delay * (3 ** attempt) + random.uniform(0, 2)
+                print(f"    Rate limited (attempt {attempt+1}/{max_retries}), "
+                      f"waiting {delay:.0f}s...")
+                time.sleep(delay)
+                continue
+            raise
+    return None
+
+
+def _add_price(price_dict, tk, df, min_rows=252):
+    """Add a ticker's price data to the dict if it has enough rows."""
+    if df is None or len(df) < min_rows:
+        return False
+    df = df.copy()
+    df.index = strip_tz(df.index)
+    if 'Close' in df.columns and 'Volume' in df.columns:
+        price_dict[tk] = df[['Close', 'Volume']].dropna()
+    elif 'Close' in df.columns:
+        price_dict[tk] = df[['Close']].dropna()
+    else:
+        return False
+    return True
+
+
+def download_all_prices(universe, cache, cache_path):
+    """Multi-source price waterfall. Returns (price_dict, unavail_set).
+
+    Sources tried in order:
+    1. Local cache (instant)
+    2. SimFin daily share prices (bulk)
+    3. yFinance batch (chunks of 500)
+    4. FMP historical (cap 200 requests)
+    5. yFinance individual (cap 100)
+    """
     price_dict = cache.get('prices', {})
     unavail = cache.get('unavailable_tickers', set())
+    counts = {'cache': 0, 'simfin': 0, 'yf_batch': 0, 'fmp': 0, 'yf_individual': 0}
 
     # Ensure benchmark / ETF prices
     for sym in list(SECTOR_ETFS.keys()) + ['SPY', '^VIX']:
@@ -220,70 +263,211 @@ def download_prices(universe, cache, cache_path):
             try:
                 d = _yf_download_with_retry(sym, period="5y", progress=False)
                 if d is not None and len(d) > 100:
-                    d.index = strip_tz(d.index)
-                    price_dict[sym] = (
-                        d[['Close', 'Volume']].dropna()
-                        if 'Volume' in d.columns
-                        else d[['Close']].dropna()
-                    )
-            except:
+                    _add_price(price_dict, sym, d, min_rows=100)
+            except Exception:
                 pass
 
-    need = [tk for tk in universe if tk not in price_dict and tk not in unavail]
+    # What do we still need?
+    all_need = [tk for tk in universe if tk not in price_dict and tk not in unavail]
+    cached_count = len([tk for tk in universe if tk in price_dict])
+    counts['cache'] = cached_count
+
+    if not all_need:
+        print(f"  All {cached_count} prices cached")
+        return price_dict, unavail
+
+    print(f"  Need prices for {len(all_need)} tickers ({cached_count} cached, "
+          f"{len(unavail)} known-unavailable)...")
+
+    # ── Source 2: SimFin daily share prices (bulk) ──
+    need = [tk for tk in all_need if tk not in price_dict]
     if need:
-        print(f"  Downloading {len(need)} tickers ({len(unavail)} on skip list)...")
-        before_dl = len(price_dict)
-        batch_count = 0
-        for bs in range(0, len(need), 100):
-            batch = need[bs:bs + 100]
-            batch_count += 1
+        try:
+            sf.set_api_key(SIMFIN_KEY)
+            sf.set_data_dir('~/simfin_data/')
+            sp = sf.load_shareprices(market='us', variant='daily')
+            if sp is not None and len(sp) > 0:
+                sf_tickers = set(sp.index.get_level_values('Ticker'))
+                for tk in need:
+                    if tk in sf_tickers:
+                        try:
+                            tkd = sp.loc[tk]
+                            # Map SimFin column names
+                            rename = {}
+                            for col in tkd.columns:
+                                cl = col.lower()
+                                if 'close' in cl:
+                                    rename[col] = 'Close'
+                                elif 'volume' in cl:
+                                    rename[col] = 'Volume'
+                            if rename:
+                                tkd = tkd.rename(columns=rename)
+                            if _add_price(price_dict, tk, tkd):
+                                counts['simfin'] += 1
+                        except Exception:
+                            pass
+                print(f"    SimFin prices: +{counts['simfin']}")
+                cache['prices'] = price_dict
+                save_cache(cache, cache_path)
+        except Exception as e:
+            print(f"    SimFin prices: {e}")
+
+    # ── Source 3: yFinance batch (chunks of 500) ──
+    need = [tk for tk in all_need if tk not in price_dict]
+    if need:
+        before = len(price_dict)
+        for bs in range(0, len(need), 500):
+            batch = need[bs:bs + 500]
             try:
                 data = _yf_download_with_retry(
                     batch, period="5y", group_by="ticker",
                     threads=True, progress=False,
                 )
-                if len(batch) == 1:
-                    tk = batch[0]
-                    if data is not None and len(data) > 252:
-                        data.index = strip_tz(data.index)
-                        price_dict[tk] = (
-                            data[['Close', 'Volume']].dropna()
-                            if 'Volume' in data.columns
-                            else data[['Close']].dropna()
-                        )
-                else:
-                    for tk in batch:
-                        try:
-                            tkd = data[tk][['Close', 'Volume']].dropna()
-                            if len(tkd) > 252:
-                                tkd.index = strip_tz(tkd.index)
-                                price_dict[tk] = tkd
-                        except:
-                            pass
+                if data is not None:
+                    if len(batch) == 1:
+                        tk = batch[0]
+                        _add_price(price_dict, tk, data)
+                    else:
+                        for tk in batch:
+                            try:
+                                tkd = data[tk][['Close', 'Volume']].dropna()
+                                _add_price(price_dict, tk, tkd)
+                            except Exception:
+                                pass
             except Exception as e:
                 err_str = str(e).lower()
                 if 'no data' not in err_str:
-                    print(f"    Batch {batch_count} error: {e}")
-            # 2-second pause between batches to avoid rate limits
-            time.sleep(2)
-        still_missing = {tk for tk in need if tk not in price_dict}
-        if still_missing:
-            unavail.update(still_missing)
-            cache['unavailable_tickers'] = unavail
+                    print(f"    yFinance batch error: {e}")
+            time.sleep(5)
+        counts['yf_batch'] = len(price_dict) - before - counts['simfin']
+        if counts['yf_batch'] > 0:
+            print(f"    yFinance batch: +{counts['yf_batch']}")
         cache['prices'] = price_dict
         save_cache(cache, cache_path)
-        new_count = len(price_dict) - before_dl
-        print(f"  Download complete: +{new_count} new, "
-              f"{len(still_missing)} unavailable, "
-              f"{len(price_dict)} total cached")
-    else:
-        if unavail:
-            print(f"  All cached \u2705 ({len(unavail)} on skip list)")
-        else:
-            print(f"  All cached \u2705")
+
+    # ── Source 4: FMP historical (cap 200) ──
+    need = [tk for tk in all_need if tk not in price_dict]
+    fmp_key = FMP_KEY
+    if fmp_key and need:
+        fmp_cap = min(200, len(need))
+        for tk in need[:fmp_cap]:
+            try:
+                url = (f"https://financialmodelingprep.com/api/v3/"
+                       f"historical-price-full/{tk}?timeseries=1260&apikey={fmp_key}")
+                resp = urllib.request.urlopen(url, timeout=10)
+                raw = json.loads(resp.read())
+                hist = raw.get('historical', [])
+                if len(hist) > 252:
+                    df = pd.DataFrame(hist)
+                    df['date'] = pd.to_datetime(df['date'])
+                    df = df.set_index('date').sort_index()
+                    df = df.rename(columns={'close': 'Close', 'volume': 'Volume'})
+                    if 'Close' in df.columns:
+                        cols = ['Close']
+                        if 'Volume' in df.columns:
+                            cols.append('Volume')
+                        if _add_price(price_dict, tk, df[cols]):
+                            counts['fmp'] += 1
+            except Exception:
+                pass
+            time.sleep(0.3)
+        if counts['fmp'] > 0:
+            print(f"    FMP historical: +{counts['fmp']}")
+        cache['prices'] = price_dict
+        save_cache(cache, cache_path)
+
+    # ── Source 5: yFinance individual (cap 100) ──
+    need = [tk for tk in all_need if tk not in price_dict]
+    if need:
+        yf_ind_cap = min(100, len(need))
+        for tk in need[:yf_ind_cap]:
+            try:
+                d = _yf_download_with_retry(tk, period="5y", progress=False)
+                if d is not None and _add_price(price_dict, tk, d):
+                    counts['yf_individual'] += 1
+            except Exception:
+                pass
+            time.sleep(1)
+        if counts['yf_individual'] > 0:
+            print(f"    yFinance individual: +{counts['yf_individual']}")
+        cache['prices'] = price_dict
+        save_cache(cache, cache_path)
+
+    # ── Update skip list with tickers that failed ALL sources ──
+    still_missing = {tk for tk in all_need if tk not in price_dict}
+    if still_missing:
+        unavail.update(still_missing)
+        cache['unavailable_tickers'] = unavail
+        save_cache(cache, cache_path)
+
+    # ── Summary ──
+    total_new = counts['simfin'] + counts['yf_batch'] + counts['fmp'] + counts['yf_individual']
+    total = len([tk for tk in universe if tk in price_dict])
+    print(f"\n  {'='*45}")
+    print(f"  PRICE DOWNLOAD SUMMARY")
+    print(f"    Cache hit:            {counts['cache']:>5}")
+    print(f"    SimFin prices:        {counts['simfin']:>5}")
+    print(f"    yFinance batch:       {counts['yf_batch']:>5}")
+    print(f"    FMP historical:       {counts['fmp']:>5}")
+    print(f"    yFinance individual:  {counts['yf_individual']:>5}")
+    print(f"    Total:              {total:>5,}")
+    print(f"    Still missing:        {len(still_missing):>5}")
+    print(f"  {'='*45}")
 
     return price_dict, unavail
 
+
+# ═══════════════════════════════════════════════════════════════
+# S&P Index tickers
+# ═══════════════════════════════════════════════════════════════
+
+def get_sp_index_tickers():
+    """Scrape S&P 400 MidCap + S&P 600 SmallCap tickers from Wikipedia.
+
+    Returns a set of ticker symbols. Returns empty set on failure.
+    """
+    tickers = set()
+    urls = [
+        ('S&P 400', 'https://en.wikipedia.org/wiki/List_of_S%26P_400_companies'),
+        ('S&P 600', 'https://en.wikipedia.org/wiki/List_of_S%26P_600_companies'),
+    ]
+    for label, url in urls:
+        try:
+            tables = pd.read_html(url)
+            if tables:
+                df = tables[0]
+                # Find the ticker/symbol column
+                sym_col = None
+                for col in df.columns:
+                    if isinstance(col, str) and col.lower() in ('symbol', 'ticker', 'ticker symbol'):
+                        sym_col = col
+                        break
+                if sym_col is None:
+                    # Try first column that looks like tickers
+                    for col in df.columns:
+                        if isinstance(col, str) and 'symbol' in col.lower():
+                            sym_col = col
+                            break
+                if sym_col is None and len(df.columns) > 0:
+                    sym_col = df.columns[0]  # Fallback to first column
+                if sym_col is not None:
+                    syms = df[sym_col].dropna().astype(str)
+                    # Replace . with - (BRK.B -> BRK-B)
+                    syms = syms.str.replace('.', '-', regex=False).str.strip()
+                    tickers.update(syms)
+                    print(f"    {label}: {len(syms)} tickers")
+        except Exception as e:
+            print(f"    {label} scrape failed: {e}")
+    if tickers:
+        print(f"    Total S&P index: {len(tickers)} tickers")
+    else:
+        print(f"    WARNING: Could not scrape S&P index tickers")
+    return tickers
+
+
+# ═══════════════════════════════════════════════════════════════
+# Benchmarks
+# ═══════════════════════════════════════════════════════════════
 
 def _to_series(df, col='Close'):
     """Extract a single column as a guaranteed pd.Series (not DataFrame)."""
@@ -310,6 +494,10 @@ def derive_benchmarks(price_dict):
     return spy_close, spy_ret, vix_series, sector_etf_ret
 
 
+# ═══════════════════════════════════════════════════════════════
+# Top-level data loader
+# ═══════════════════════════════════════════════════════════════
+
 def load_all_data():
     """Top-level entry point: load everything and return a data bundle."""
     t0 = time.time()
@@ -323,23 +511,23 @@ def load_all_data():
     df_inc, df_bal, df_cf = load_simfin(cache, cache_path)
     sector_map = load_sector_map(cache, cache_path)
     universe = build_universe(df_inc, df_bal, df_cf, sector_map)
-    price_dict, unavail = download_prices(universe, cache, cache_path)
+    price_dict, unavail = download_all_prices(universe, cache, cache_path)
 
-    # Finalise universe — include delisted tickers with history for training
-    universe = sorted(
+    # Training universe: all tickers with prices (includes delisted with history)
+    training_universe = sorted(
         set(universe) & set(price_dict.keys())
         - {'SPY', '^VIX'}
         - set(SECTOR_ETFS.keys())
     )
 
-    # Classify: tradeable (recent prices) vs delisted (historical only)
-    tradeable, delisted_with_history = _classify_tickers(price_dict)
-    tradeable_tickers = set(universe) & tradeable
+    # Classify: tradeable (recent + liquid) vs delisted (historical only)
+    tradeable, delisted_with_history = classify_tickers(price_dict)
+    tradeable_tickers = set(training_universe) & tradeable
 
     spy_close, spy_ret, vix_series, sector_etf_ret = derive_benchmarks(price_dict)
 
-    print(f"  Universe: {len(universe)} for training, "
-          f"{len(tradeable_tickers)} tradeable for walk-forward "
+    print(f"  Training: {len(training_universe)} stocks | "
+          f"Tradeable: {len(tradeable_tickers)} for walk-forward "
           f"({len(delisted_with_history)} delisted with history)")
     print(f"  {elapsed()}")
     print()
@@ -350,7 +538,8 @@ def load_all_data():
         intm_loaded=intm_loaded,
         df_q=df_q, df_dev=df_dev, df_hold=df_hold, df_daily=df_daily,
         df_inc=df_inc, df_bal=df_bal, df_cf=df_cf,
-        sector_map=sector_map, universe=universe,
+        sector_map=sector_map,
+        universe=training_universe,
         tradeable_tickers=tradeable_tickers,
         price_dict=price_dict, unavail=unavail,
         spy_close=spy_close, spy_ret=spy_ret,

@@ -1,5 +1,5 @@
 """
-DROP SCORE v17 — CONVICTION + REGIME + REALISM
+DROP SCORE v18 — LOCKED CONFIG + DUAL UNIVERSE + BORROW COSTS
 Configuration constants and SimFin column name setup.
 """
 import os, time
@@ -66,7 +66,20 @@ SECTOR_ETFS = {
     'XLRE': 'Real Estate', 'XLC': 'Communication',
 }
 FORCE_RECOMPUTE = False
-FORCE_TARGET = "voladj_2sig_63d"  # Override Pareto target selection for walkforward validation
+
+# ── Locked trading configuration (validated via v17 comparison table) ──
+TRADING_TARGET = "exdrop_15_10d"   # Validated winner: 71% win, +$1.95/sh top-25%
+TRADING_HOLD = 21                  # 21-day hold matched to 10d excess-drop target
+ENTRY_MODE = "confirmed"           # 2% drop in 5 days required before entry
+CONFIRMATION_DROP = 0.02           # Minimum decline from signal day's close
+CONFIRMATION_WINDOW = 5            # Trading days to wait for confirmation
+
+# ── Borrow costs ──
+BORROW_RATE_EASY = 0.03            # 3% annual for avg_vol >= 1M
+BORROW_RATE_HARD = 0.06            # 6% annual for avg_vol 500K-1M
+
+# ── Universe mode ──
+UNIVERSE_MODE = "both"             # "sp_index", "full", or "both"
 
 # ── Timing ──
 t_start = time.time()

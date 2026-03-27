@@ -1,4 +1,4 @@
-"""Utility functions for Drop Score v17."""
+"""Utility functions for Drop Score v18."""
 import time
 import numpy as np
 import pandas as pd

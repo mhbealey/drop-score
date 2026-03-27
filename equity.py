@@ -286,7 +286,7 @@ def run_equity_scenarios(data_bundle):
         ax.grid(True, alpha=0.3)
         plt.tight_layout()
         try:
-            plt.savefig(os.path.join(cache_dir, 'equity_v17.png'), dpi=150)
+            plt.savefig(os.path.join(cache_dir, 'equity_v18.png'), dpi=150)
         except:
             pass
         plt.show()
