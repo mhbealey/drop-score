@@ -8,6 +8,14 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 
+# Monkey-patch: strip deprecated date_parser kwarg so simfin works with pandas 2.x+
+import simfin.load
+_original_read_csv = pd.read_csv
+def _patched_read_csv(*args, **kwargs):
+    kwargs.pop('date_parser', None)
+    return _original_read_csv(*args, **kwargs)
+simfin.load.pd.read_csv = _patched_read_csv
+
 from config import (
     SIMFIN_KEY, SECTOR_ETFS, FORCE_RECOMPUTE,
 )
