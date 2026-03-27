@@ -349,15 +349,12 @@ if _diag_label:
             print(f"    run_model returned None for v252 target")
 
         # ── Test 3: Pure fundamental model on holdout ──
-        _fund_exclude = {
-            'vol_30d', 'vol_60d', 'vol_90d', 'ret_5d', 'ret_21d', 'ret_63d',
-            'dd_from_high', 'gap_count_30d', 'down_days_30d', 'death_cross',
-            'excess_ret_21d', 'excess_ret_63d', 'sector_excess_21d',
-            'sector_excess_63d', 'consec_down_days', 'gap_down_today',
-            'gap_downs_5d', 'spy_corr_60d', 'roa_x_vol', 'margin_x_vol',
-            'margin_trend_x_vol',
-        }
-        _fund_only = [f for f in _fcols_q if f not in _fund_exclude]
+        _price_keywords = ['vol_', 'ret_', 'dd_from', 'rsi', 'gap_count',
+                           'beta', 'vix', 'death_cross', 'down_days',
+                           'gap_down', 'spy_corr', 'excess_ret',
+                           'sector_excess', 'consec_down', '_x_vol']
+        _fund_only = [f for f in _fcols_q
+                      if not any(kw in f for kw in _price_keywords)]
         if len(_fund_only) >= 5:
             print(f"\n  Test 3 -- Fund-only model ({len(_fund_only)} features):")
             _fund_meds = _df_dev[_fund_only].median()

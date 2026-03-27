@@ -3,7 +3,7 @@ Data loading: SimFin fundamentals, multi-source price waterfall,
 sector mapping, pickle caching, universe construction,
 training/tradeable split, S&P index tickers.
 """
-import os, time, pickle, random, json
+import os, time, pickle, random, json, io
 import urllib.request
 import simfin as sf
 import yfinance as yf
@@ -438,8 +438,8 @@ def get_sp_index_tickers():
             req = urllib.request.Request(
                 url, headers={'User-Agent': 'Mozilla/5.0 (Drop Score Bot)'}
             )
-            html = urllib.request.urlopen(req, timeout=15).read()
-            tables = pd.read_html(html)
+            html_str = urllib.request.urlopen(req, timeout=15).read().decode('utf-8')
+            tables = pd.read_html(io.StringIO(html_str))
             if tables:
                 df = tables[0]
                 sym_col = None
