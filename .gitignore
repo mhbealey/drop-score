@@ -1,0 +1,5 @@
+.env
+*.pkl
+__pycache__/
+plots/
+*.csv

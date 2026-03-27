@@ -1,0 +1,9 @@
+simfin
+yfinance
+xgboost
+lightgbm
+scikit-learn
+matplotlib
+tqdm
+pandas
+numpy
