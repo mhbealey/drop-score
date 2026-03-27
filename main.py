@@ -12,7 +12,7 @@ def install(pkg):
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", pkg])
 
 for pkg in ["simfin", "yfinance", "xgboost", "lightgbm", "scikit-learn",
-            "matplotlib", "tqdm"]:
+            "matplotlib", "tqdm", "lxml", "html5lib"]:
     try:
         __import__(pkg.replace("-", "_"))
     except ImportError:
@@ -46,15 +46,15 @@ sys.stdout = _Tee(sys.__stdout__, _log_file)
 
 # ── Project modules ──
 from config import (
-    N_BOOT, VOL_FLOOR, t_start,
+    N_BOOT, N_FOLDS, VOL_FLOOR, t_start,
     TRADING_TARGET, TRADING_HOLD, ENTRY_MODE,
     BORROW_RATE_EASY, BORROW_RATE_HARD,
     UNIVERSE_MODE, SECTOR_ETFS,
 )
-from utils import elapsed
+from utils import elapsed, clean_X, to_scalar, ensure_series
 from data import load_all_data, get_sp_index_tickers
 from features import prepare_features
-from model import run_vulnerability_model
+from model import run_vulnerability_model, run_model
 from walkforward import run_walkforward
 from equity import run_equity_scenarios
 
@@ -234,6 +234,174 @@ if UNIVERSE_MODE == "full" and 'Full SimFin' not in pipeline_results:
 if UNIVERSE_MODE == "sp_index" and 'S&P 400+600' not in pipeline_results:
     # Already handled above
     pass
+
+
+# ═══════════════════════════════════════════════════════════════
+# VOLADJ COLLAPSE DIAGNOSTIC
+# ═══════════════════════════════════════════════════════════════
+
+# Run on the primary (full) universe result
+_diag_label = 'Full SimFin' if 'Full SimFin' in pipeline_results else (
+    list(pipeline_results.keys())[0] if pipeline_results else None
+)
+if _diag_label:
+    _diag = pipeline_results[_diag_label]
+    _df_dev = _diag['df_dev']
+    _df_hold = _diag['df_hold']
+    _fcols_q = _diag['fcols_q']
+    _fill_meds = _diag['fill_meds_q']
+    _v_results = _diag['v_results']
+    _K = _diag['K']
+    _price_dict = data['price_dict']
+
+    _va_tgt = 'voladj_2sig_63d'
+    if _va_tgt in _v_results:
+        print("\n" + "=" * 70)
+        print("VOLADJ COLLAPSE DIAGNOSTIC")
+        print("=" * 70)
+        _va_dev_auc = _v_results[_va_tgt]['mauc']
+
+        # ── Test 1: Truncation check ──
+        _full_window = 0
+        _truncated = 0
+        for _idx, _row in _df_hold.iterrows():
+            _tk = _row['ticker']
+            if _tk not in _price_dict:
+                _truncated += 1
+                continue
+            _pxd = _price_dict[_tk]
+            _px = ensure_series(
+                _pxd['Close'] if 'Close' in _pxd.columns else _pxd.iloc[:, 0]
+            )
+            _vi = _px.index[_px.index >= _row['report_date']]
+            if len(_vi) == 0:
+                _truncated += 1
+                continue
+            _si = _px.index.get_loc(_vi[0])
+            if _si + 63 < len(_px):
+                _full_window += 1
+            else:
+                _truncated += 1
+        print(f"\n  Test 1 -- Truncation: {_full_window} full 63d window, {_truncated} truncated")
+        if _truncated > len(_df_hold) * 0.20:
+            print(f"    \u26a0\ufe0f {_truncated/len(_df_hold):.0%} truncated"
+                  f" -- this likely explains the low holdout AUC")
+
+        # ── Test 2: Redefine voladj using 252-day trailing vol ──
+        print(f"\n  Test 2 -- 252d vol threshold:")
+        for _lbl, _dft in [('Dev', _df_dev), ('Hold', _df_hold)]:
+            _new_labels = []
+            for _idx, _row in _dft.iterrows():
+                _tk = _row['ticker']
+                if _tk not in _price_dict:
+                    _new_labels.append(np.nan)
+                    continue
+                _pxd = _price_dict[_tk]
+                _px = ensure_series(
+                    _pxd['Close'] if 'Close' in _pxd.columns else _pxd.iloc[:, 0]
+                )
+                _vi = _px.index[_px.index >= _row['report_date']]
+                if len(_vi) == 0:
+                    _new_labels.append(np.nan)
+                    continue
+                _si = _px.index.get_loc(_vi[0])
+                if _si >= 252:
+                    _dr = _px.pct_change()
+                    _vol_252 = float(_dr.iloc[_si - 251:_si + 1].std() * np.sqrt(252))
+                else:
+                    _vol_252 = 0.3
+                _vol_252 = max(_vol_252, 0.05)
+                _period_vol = (_vol_252 / np.sqrt(252)) * np.sqrt(63)
+                _threshold = -2.0 * _period_vol
+                if _si + 63 < len(_px):
+                    _ret = (float(_px.iloc[_si + 63]) - float(_px.iloc[_si])) / float(_px.iloc[_si])
+                    _new_labels.append(1 if _ret <= _threshold else 0)
+                else:
+                    _new_labels.append(np.nan)
+            _dft['voladj_2sig_63d_v252'] = _new_labels
+
+        _r252 = run_model(_df_dev, _fcols_q, 'voladj_2sig_63d_v252', _fill_meds, N_FOLDS, 100, _K)
+        if _r252:
+            print(f"    Dev AUC: {_r252['mauc']:.3f}")
+            _lf252 = _r252['folds'][-1]
+            _Xh252 = clean_X(_df_hold, _fcols_q, _fill_meds)
+            try:
+                _hp252 = _lf252['model'].predict_proba(_Xh252[_lf252['feats']])[:, 1]
+                _yh252 = _df_hold['voladj_2sig_63d_v252'].fillna(0).astype(int)
+                _valid252 = ~_df_hold['voladj_2sig_63d_v252'].isna()
+                if _valid252.sum() > 50 and _yh252[_valid252].sum() >= 5:
+                    _ho252 = roc_auc_score(_yh252[_valid252], _hp252[_valid252])
+                    _n_pos252 = int(_yh252[_valid252].sum())
+                    _n_neg252 = int((~_yh252[_valid252].astype(bool)).sum())
+                    print(f"    Holdout AUC: {_ho252:.3f}")
+                    print(f"    Events: {_n_pos252} pos, {_n_neg252} neg")
+                    if _ho252 > 0.55:
+                        print(f"    \u2705 252d vol decoupling FIXES the holdout"
+                              f" -- original collapse was vol-regime dependent")
+                    else:
+                        print(f"    \u274c Still collapsed"
+                              f" -- problem is deeper than vol definition")
+                else:
+                    print(f"    Holdout: too few valid samples or events")
+            except Exception as _e:
+                print(f"    Holdout scoring failed: {_e}")
+        else:
+            print(f"    run_model returned None for v252 target")
+
+        # ── Test 3: Pure fundamental model on holdout ──
+        _fund_exclude = {
+            'vol_30d', 'vol_60d', 'vol_90d', 'ret_5d', 'ret_21d', 'ret_63d',
+            'dd_from_high', 'gap_count_30d', 'down_days_30d', 'death_cross',
+            'excess_ret_21d', 'excess_ret_63d', 'sector_excess_21d',
+            'sector_excess_63d', 'consec_down_days', 'gap_down_today',
+            'gap_downs_5d', 'spy_corr_60d', 'roa_x_vol', 'margin_x_vol',
+            'margin_trend_x_vol',
+        }
+        _fund_only = [f for f in _fcols_q if f not in _fund_exclude]
+        if len(_fund_only) >= 5:
+            print(f"\n  Test 3 -- Fund-only model ({len(_fund_only)} features):")
+            _fund_meds = _df_dev[_fund_only].median()
+            _r_fund = run_model(
+                _df_dev, _fund_only, _va_tgt, _fund_meds,
+                N_FOLDS, 100, min(_K, len(_fund_only)),
+            )
+            if _r_fund:
+                print(f"    Dev AUC: {_r_fund['mauc']:.3f}")
+                _lf_f = _r_fund['folds'][-1]
+                _Xh_f = clean_X(_df_hold, _fund_only, _fund_meds)
+                try:
+                    _hp_f = _lf_f['model'].predict_proba(_Xh_f[_lf_f['feats']])[:, 1]
+                    _yh_f = _df_hold[_va_tgt].fillna(0).astype(int)
+                    _ho_f = roc_auc_score(_yh_f, _hp_f)
+                    print(f"    Holdout AUC: {_ho_f:.3f}")
+                    if _ho_f > 0.55:
+                        print(f"    \u2705 Fundamental signal survives"
+                              f" -- vol features caused the collapse")
+                    else:
+                        print(f"    \u274c Fundamentals also collapse"
+                              f" -- signal is regime-specific")
+                except Exception as _e:
+                    print(f"    Holdout: failed ({_e})")
+
+        # ── Summary ──
+        _ho252_val = _ho252 if '_ho252' in locals() else None
+        _ho_f_val = _ho_f if '_ho_f' in locals() else None
+        _r_fund_val = _r_fund if '_r_fund' in locals() else None
+        print(f"\n  VOLADJ SUMMARY:")
+        print(f"    Original:  Dev={_va_dev_auc:.3f}")
+        if _r252:
+            _s252 = f"    252d-vol:  Dev={_r252['mauc']:.3f}"
+            if _ho252_val is not None:
+                _s252 += f" Hold={_ho252_val:.3f}"
+            print(_s252)
+        if len(_fund_only) >= 5 and _r_fund_val:
+            _sf = f"    Fund-only: Dev={_r_fund_val['mauc']:.3f}"
+            if _ho_f_val is not None:
+                _sf += f" Hold={_ho_f_val:.3f}"
+            print(_sf)
+        print(f"    Truncation: {_truncated}/{len(_df_hold)}"
+              f" ({_truncated/len(_df_hold):.0%}) holdout rows lack full 63d window")
+        print()
 
 
 # ═══════════════════════════════════════════════════════════════

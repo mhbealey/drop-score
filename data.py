@@ -424,7 +424,9 @@ def download_all_prices(universe, cache, cache_path):
 def get_sp_index_tickers():
     """Scrape S&P 400 MidCap + S&P 600 SmallCap tickers from Wikipedia.
 
-    Returns a set of ticker symbols. Returns empty set on failure.
+    Uses User-Agent header to avoid 403 from GitHub Actions.
+    Falls back to data/sp_index_fallback.txt if scrape fails.
+    Returns a set of ticker symbols.
     """
     tickers = set()
     urls = [
@@ -433,35 +435,51 @@ def get_sp_index_tickers():
     ]
     for label, url in urls:
         try:
-            tables = pd.read_html(url)
+            req = urllib.request.Request(
+                url, headers={'User-Agent': 'Mozilla/5.0 (Drop Score Bot)'}
+            )
+            html = urllib.request.urlopen(req, timeout=15).read()
+            tables = pd.read_html(html)
             if tables:
                 df = tables[0]
-                # Find the ticker/symbol column
                 sym_col = None
                 for col in df.columns:
-                    if isinstance(col, str) and col.lower() in ('symbol', 'ticker', 'ticker symbol'):
+                    if isinstance(col, str) and col.lower() in (
+                        'symbol', 'ticker', 'ticker symbol'
+                    ):
                         sym_col = col
                         break
                 if sym_col is None:
-                    # Try first column that looks like tickers
                     for col in df.columns:
                         if isinstance(col, str) and 'symbol' in col.lower():
                             sym_col = col
                             break
                 if sym_col is None and len(df.columns) > 0:
-                    sym_col = df.columns[0]  # Fallback to first column
+                    sym_col = df.columns[0]
                 if sym_col is not None:
                     syms = df[sym_col].dropna().astype(str)
-                    # Replace . with - (BRK.B -> BRK-B)
                     syms = syms.str.replace('.', '-', regex=False).str.strip()
                     tickers.update(syms)
                     print(f"    {label}: {len(syms)} tickers")
         except Exception as e:
             print(f"    {label} scrape failed: {e}")
+
     if tickers:
         print(f"    Total S&P index: {len(tickers)} tickers")
     else:
-        print(f"    WARNING: Could not scrape S&P index tickers")
+        # Fallback to hardcoded file
+        fallback_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), 'data', 'sp_index_fallback.txt'
+        )
+        if os.path.exists(fallback_path):
+            with open(fallback_path) as f:
+                for line in f:
+                    tk = line.strip()
+                    if tk:
+                        tickers.add(tk)
+            print(f"    Wikipedia scrape failed, loaded {len(tickers)} tickers from sp_index_fallback.txt")
+        else:
+            print(f"    WARNING: Could not scrape S&P index tickers and no fallback file")
     return tickers
 
 
