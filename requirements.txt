@@ -5,6 +5,6 @@ lightgbm
 scikit-learn
 matplotlib
 tqdm
-pandas
+pandas<2.0
 numpy
 gdown
