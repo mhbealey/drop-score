@@ -36,6 +36,16 @@ jobs:
       - name: Run main.py
         run: python main.py
 
+      - name: Save results
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          LATEST=$(ls -t results/*.txt | head -1)
+          cp "$LATEST" results/latest.txt
+          git add results/latest.txt
+          git diff --cached --quiet || git commit -m "results: $(date -u +%Y-%m-%d)" && git push
+        if: always()
+
       - name: Share results
         env:
           GH_TOKEN: ${{ github.token }}

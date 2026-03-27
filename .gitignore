@@ -5,3 +5,4 @@ plots/
 *.csv
 data/
 results/
+!results/latest.txt
