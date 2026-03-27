@@ -36,3 +36,21 @@ def strip_tz(idx):
 
 def clean_X(df, cols, meds):
     return df[cols].fillna(meds).replace([np.inf, -np.inf], 0)
+
+
+def to_scalar(val):
+    """Safely extract a Python float from any pandas/numpy object."""
+    if isinstance(val, (pd.DataFrame, pd.Series)):
+        val = val.squeeze()
+    if isinstance(val, (pd.Series, pd.DataFrame)):
+        val = val.iloc[0]
+    if hasattr(val, 'item'):
+        return float(val.item())
+    return float(val)
+
+
+def ensure_series(s):
+    """Squeeze a single-column DataFrame to a Series."""
+    if isinstance(s, pd.DataFrame):
+        return s.squeeze(axis=1)
+    return s

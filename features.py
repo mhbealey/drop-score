@@ -11,7 +11,7 @@ from config import (
     FWD_WINDOWS, DROP_THRESH, EXCESS_THRESH,
     MIN_EVENTS, MAX_BASE_RATE, MIN_K, HOLDOUT_MO,
 )
-from utils import elapsed, get_col
+from utils import elapsed, get_col, to_scalar, ensure_series
 
 
 def recompute_outcomes(df, price_dict, spy_close):
@@ -32,7 +32,7 @@ def _outcomes(grp, pd_dict, spy_c):
     if tk not in pd_dict:
         return pd.DataFrame()
     pxd = pd_dict[tk]
-    px = pxd['Close'] if 'Close' in pxd.columns else pxd.iloc[:, 0]
+    px = ensure_series(pxd['Close'] if 'Close' in pxd.columns else pxd.iloc[:, 0])
     if len(px) < 63:
         return pd.DataFrame()
     dr_s = px.pct_change()
@@ -46,25 +46,25 @@ def _outcomes(grp, pd_dict, spy_c):
             results.append(oc)
             continue
         si = px.index.get_loc(vi[0])
-        sp_ = float(px.iloc[si])
+        sp_ = to_scalar(px.iloc[si])
         if sp_ <= 0:
             results.append(oc)
             continue
         cur_vol = max(
-            float(v30_s.iloc[si]) if si < len(v30_s) and pd.notna(v30_s.iloc[si]) else 0.3,
+            to_scalar(v30_s.iloc[si]) if si < len(v30_s) and pd.notna(v30_s.iloc[si]) else 0.3,
             0.05,
         )
         for w in FWD_WINDOWS:
             ei = si + w
             if ei >= len(px):
                 continue
-            ep = float(px.iloc[ei])
+            ep = to_scalar(px.iloc[ei])
             er = (ep - sp_) / sp_
             oc[f'ret_{w}d_fwd'] = er
             if spy_c is not None:
                 try:
-                    ss = float(spy_c.asof(px.index[si]))
-                    se = float(spy_c.asof(px.index[ei]))
+                    ss = to_scalar(spy_c.asof(px.index[si]))
+                    se = to_scalar(spy_c.asof(px.index[ei]))
                     if pd.notna(ss) and pd.notna(se) and ss > 0:
                         oc[f'excess_{w}d'] = er - (se - ss) / ss
                 except:
@@ -178,13 +178,13 @@ def build_quarterly_row(tk, idx, df_inc, df_bal, df_cf, price_dict, spy_close,
     # === Price-based features (at report date) ===
     if tk in price_dict:
         pxd = price_dict[tk]
-        px = pxd['Close'] if 'Close' in pxd.columns else pxd.iloc[:, 0]
-        vol_col = pxd['Volume'] if 'Volume' in pxd.columns else None
+        px = ensure_series(pxd['Close'] if 'Close' in pxd.columns else pxd.iloc[:, 0])
+        vol_col = ensure_series(pxd['Volume']) if 'Volume' in pxd.columns else None
         rd = row['report_date']
         vi = px.index[px.index >= rd]
         if len(vi) > 0:
             si = px.index.get_loc(vi[0])
-            price = float(px.iloc[si])
+            price = to_scalar(px.iloc[si])
             row['price'] = price
 
             # Market cap
@@ -192,7 +192,7 @@ def build_quarterly_row(tk, idx, df_inc, df_bal, df_cf, price_dict, spy_close,
 
             # Average volume (30d)
             if vol_col is not None and si >= 30:
-                avg_vol = float(vol_col.iloc[max(0, si-30):si].mean())
+                avg_vol = to_scalar(vol_col.iloc[max(0, si-30):si].mean())
                 row['avg_vol'] = avg_vol
                 row['dollar_volume'] = avg_vol * price
 
@@ -200,40 +200,40 @@ def build_quarterly_row(tk, idx, df_inc, df_bal, df_cf, price_dict, spy_close,
             dr = px.pct_change()
             for lb, lbl in [(5, '5d'), (21, '21d'), (63, '63d'), (126, '126d'), (252, '252d')]:
                 if si >= lb:
-                    row[f'mom_{lbl}'] = float(px.iloc[si] / px.iloc[si - lb] - 1)
+                    row[f'mom_{lbl}'] = to_scalar(px.iloc[si] / px.iloc[si - lb] - 1)
 
             # Volatility
             if si >= 30:
-                row['vol_30d'] = float(dr.iloc[max(0, si-30):si].std() * np.sqrt(252))
+                row['vol_30d'] = to_scalar(dr.iloc[max(0, si-30):si].std() * np.sqrt(252))
             if si >= 60:
-                row['vol_60d'] = float(dr.iloc[max(0, si-60):si].std() * np.sqrt(252))
+                row['vol_60d'] = to_scalar(dr.iloc[max(0, si-60):si].std() * np.sqrt(252))
             if si >= 252:
-                row['vol_252d'] = float(dr.iloc[max(0, si-252):si].std() * np.sqrt(252))
+                row['vol_252d'] = to_scalar(dr.iloc[max(0, si-252):si].std() * np.sqrt(252))
 
             # Relative vol (short vs long)
             if si >= 60:
                 v30 = dr.iloc[max(0, si-30):si].std()
                 v60 = dr.iloc[max(0, si-60):si].std()
-                row['vol_ratio_30_60'] = _safe_div(v30, v60)
+                row['vol_ratio_30_60'] = _safe_div(to_scalar(v30), to_scalar(v60))
 
             # Max drawdown 63d
             if si >= 63:
                 window = px.iloc[max(0, si-63):si+1]
                 running_max = window.cummax()
                 dd = (window - running_max) / running_max
-                row['max_dd_63d'] = float(dd.min())
+                row['max_dd_63d'] = to_scalar(dd.min())
 
             # Distance from 52w high/low
             if si >= 252:
-                h52 = float(px.iloc[max(0, si-252):si+1].max())
-                l52 = float(px.iloc[max(0, si-252):si+1].min())
+                h52 = to_scalar(px.iloc[max(0, si-252):si+1].max())
+                l52 = to_scalar(px.iloc[max(0, si-252):si+1].min())
                 row['dist_52w_high'] = (price - h52) / h52 if h52 > 0 else np.nan
                 row['dist_52w_low'] = (price - l52) / l52 if l52 > 0 else np.nan
 
             # Volume trend
             if vol_col is not None and si >= 60:
-                v30_avg = float(vol_col.iloc[max(0, si-30):si].mean())
-                v60_avg = float(vol_col.iloc[max(0, si-60):si].mean())
+                v30_avg = to_scalar(vol_col.iloc[max(0, si-30):si].mean())
+                v60_avg = to_scalar(vol_col.iloc[max(0, si-60):si].mean())
                 row['vol_trend'] = _safe_div(v30_avg, v60_avg)
 
             # Valuation ratios (price-based)
@@ -247,7 +247,8 @@ def build_quarterly_row(tk, idx, df_inc, df_bal, df_cf, price_dict, spy_close,
             if spy_close is not None and si >= 63:
                 try:
                     stk_ret = dr.iloc[max(0, si-252):si]
-                    spy_ret_aligned = spy_close.pct_change().reindex(stk_ret.index)
+                    spy_s = ensure_series(spy_close)
+                    spy_ret_aligned = spy_s.pct_change().reindex(stk_ret.index)
                     valid = stk_ret.notna() & spy_ret_aligned.notna()
                     if valid.sum() >= 60:
                         cov = np.cov(stk_ret[valid].values, spy_ret_aligned[valid].values)
@@ -263,17 +264,17 @@ def build_quarterly_row(tk, idx, df_inc, df_bal, df_cf, price_dict, spy_close,
     if sec in sector_etf_ret and tk in price_dict:
         try:
             pxd = price_dict[tk]
-            px = pxd['Close'] if 'Close' in pxd.columns else pxd.iloc[:, 0]
+            px = ensure_series(pxd['Close'] if 'Close' in pxd.columns else pxd.iloc[:, 0])
             rd = row['report_date']
             vi = px.index[px.index >= rd]
             if len(vi) > 0:
                 si = px.index.get_loc(vi[0])
-                sec_ret = sector_etf_ret.get(sec)
+                sec_ret = ensure_series(sector_etf_ret.get(sec))
                 if sec_ret is not None and si >= 63:
-                    stk_63 = float(px.iloc[si] / px.iloc[si-63] - 1)
+                    stk_63 = to_scalar(px.iloc[si] / px.iloc[si-63] - 1)
                     sec_idx = sec_ret.index[sec_ret.index <= px.index[si]]
                     if len(sec_idx) >= 63:
-                        sec_63 = float((1 + sec_ret.loc[sec_idx[-63:]]).prod() - 1)
+                        sec_63 = to_scalar((1 + sec_ret.loc[sec_idx[-63:]]).prod() - 1)
                         row['sector_rel_mom_63d'] = stk_63 - sec_63
         except:
             pass

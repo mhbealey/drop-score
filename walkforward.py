@@ -14,7 +14,7 @@ from config import (
     SLIPPAGE, STOP_LOSS, PROFIT_TARGET, TRAILING_STOP,
     SKIP_RET5D_DOWN, SKIP_VOL_PCT, ENTRY_DELAY,
 )
-from utils import clean_X, elapsed
+from utils import clean_X, elapsed, to_scalar, ensure_series
 
 
 def run_walkforward(data_bundle):
@@ -60,15 +60,15 @@ def run_walkforward(data_bundle):
         # Regime filter at quarter start
         skip = None
         if spy_close is not None:
-            sa = spy_close.loc[:test_q.start_time + pd.Timedelta(days=10)]
+            sa = ensure_series(spy_close.loc[:test_q.start_time + pd.Timedelta(days=10)])
             if len(sa) > 21:
-                s21 = (float(sa.iloc[-1]) - float(sa.iloc[-22])) / float(sa.iloc[-22])
+                s21 = (to_scalar(sa.iloc[-1]) - to_scalar(sa.iloc[-22])) / to_scalar(sa.iloc[-22])
                 if s21 > REGIME_SPY_MAX:
                     skip = f"SPY +{s21:.1%}"
         if vix_series is not None and not skip:
-            va = vix_series.loc[:test_q.start_time + pd.Timedelta(days=10)]
-            if len(va) > 0 and float(np.asarray(va.values[-1]).flat[0]) < REGIME_VIX_MIN:
-                skip = f"VIX={float(np.asarray(va.values[-1]).flat[0]):.0f}"
+            va = ensure_series(vix_series.loc[:test_q.start_time + pd.Timedelta(days=10)])
+            if len(va) > 0 and to_scalar(va.iloc[-1]) < REGIME_VIX_MIN:
+                skip = f"VIX={to_scalar(va.iloc[-1]):.0f}"
         if skip:
             print(f"    {test_q}: SKIP ({skip})")
             continue
@@ -123,7 +123,7 @@ def run_walkforward(data_bundle):
             if pd.isna(pr) or pr <= 0 or tk not in price_dict:
                 continue
             pxd2 = price_dict[tk]
-            px2 = pxd2['Close'] if 'Close' in pxd2.columns else pxd2.iloc[:, 0]
+            px2 = ensure_series(pxd2['Close'] if 'Close' in pxd2.columns else pxd2.iloc[:, 0])
             vi = px2.index[px2.index >= row['report_date']]
             if len(vi) == 0:
                 continue
@@ -132,26 +132,26 @@ def run_walkforward(data_bundle):
             si_entry = si + ENTRY_DELAY
             if si_entry >= len(px2):
                 continue
-            entry_pr = float(px2.iloc[si_entry])
+            entry_pr = to_scalar(px2.iloc[si_entry])
             if entry_pr <= 0:
                 continue
             # Rule filters on entry day
             if si_entry >= 5:
-                r5d = (entry_pr - float(px2.iloc[si_entry - 5])) / float(px2.iloc[si_entry - 5])
+                r5d = (entry_pr - to_scalar(px2.iloc[si_entry - 5])) / to_scalar(px2.iloc[si_entry - 5])
                 if r5d < SKIP_RET5D_DOWN:
                     continue
             if si_entry >= 60:
                 dr_stk = px2.pct_change()
-                v5d = float(dr_stk.iloc[si_entry - 4:si_entry + 1].std() * np.sqrt(252))
+                v5d = to_scalar(dr_stk.iloc[si_entry - 4:si_entry + 1].std() * np.sqrt(252))
                 vh = dr_stk.iloc[si_entry - 59:si_entry + 1].rolling(5).std() * np.sqrt(252)
-                v90 = float(vh.quantile(SKIP_VOL_PCT))
+                v90 = to_scalar(vh.quantile(SKIP_VOL_PCT))
                 if pd.notna(v5d) and pd.notna(v90) and v5d > v90:
                     continue
             entry_p = entry_pr * (1 + SLIPPAGE)
             best_p = entry_p
             path = []
             for di in range(1, min(22, len(px2) - si_entry)):
-                path.append(float(px2.iloc[si_entry + di]))
+                path.append(to_scalar(px2.iloc[si_entry + di]))
             if not path:
                 continue
             stopped = False

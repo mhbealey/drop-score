@@ -221,24 +221,26 @@ def download_prices(universe, cache, cache_path):
     return price_dict, unavail
 
 
+def _to_series(df, col='Close'):
+    """Extract a single column as a guaranteed pd.Series (not DataFrame)."""
+    s = df[col] if col in df.columns else df.iloc[:, 0]
+    if isinstance(s, pd.DataFrame):
+        s = s.squeeze(axis=1)
+    return s
+
+
 def derive_benchmarks(price_dict):
     """Extract SPY, VIX, and sector ETF return series."""
     spy_close = spy_ret = vix_series = None
     if 'SPY' in price_dict:
-        sd = price_dict['SPY']
-        spy_close = sd['Close'] if 'Close' in sd.columns else sd.iloc[:, 0]
+        spy_close = _to_series(price_dict['SPY'])
         spy_ret = spy_close.pct_change()
     if '^VIX' in price_dict:
-        vd = price_dict['^VIX']
-        vix_series = vd['Close'] if 'Close' in vd.columns else vd.iloc[:, 0]
+        vix_series = _to_series(price_dict['^VIX'])
     sector_etf_ret = {}
     for etf, sec in SECTOR_ETFS.items():
         if etf in price_dict:
-            px = (
-                price_dict[etf]['Close']
-                if 'Close' in price_dict[etf].columns
-                else price_dict[etf].iloc[:, 0]
-            )
+            px = _to_series(price_dict[etf])
             sector_etf_ret[sec] = px.pct_change()
             sector_etf_ret[sec + '_close'] = px
     return spy_close, spy_ret, vix_series, sector_etf_ret

@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 from config import (
     SLIPPAGE, STOP_LOSS, VOL_FLOOR,
 )
-from utils import elapsed
+from utils import elapsed, to_scalar, ensure_series
 
 
 def run_equity_sim(trades_df, start_bal, pos_size, max_pos, label,
@@ -39,23 +39,23 @@ def run_equity_sim(trades_df, start_bal, pos_size, max_pos, label,
     for dt in dates:
         # Dynamic regime check
         if spy_regime_pct is not None and spy_close is not None:
-            sp10 = spy_close.loc[:dt]
+            sp10 = ensure_series(spy_close.loc[:dt])
             if len(sp10) > 10:
                 spy_10d = (
-                    (float(sp10.iloc[-1]) - float(sp10.iloc[-11]))
-                    / float(sp10.iloc[-11])
-                    if float(sp10.iloc[-11]) > 0 else 0
+                    (to_scalar(sp10.iloc[-1]) - to_scalar(sp10.iloc[-11]))
+                    / to_scalar(sp10.iloc[-11])
+                    if to_scalar(sp10.iloc[-11]) > 0 else 0
                 )
                 if spy_10d > spy_regime_pct:
                     # Close all open positions at today's price
                     for pos in positions:
                         tk_p = price_dict.get(pos['ticker']) if price_dict else None
                         if tk_p is not None:
-                            px_t = (tk_p['Close'] if 'Close' in tk_p.columns
+                            px_t = ensure_series(tk_p['Close'] if 'Close' in tk_p.columns
                                     else tk_p.iloc[:, 0])
                             cp = px_t.asof(dt)
                             if pd.notna(cp):
-                                early_pnl = (pos['entry_p'] - float(cp)) * pos['shares']
+                                early_pnl = (pos['entry_p'] - to_scalar(cp)) * pos['shares']
                                 cash += pos['entry_val'] + early_pnl
                                 trade_log.append({**pos, 'pnl': early_pnl, 'early_close': True})
                             else:
@@ -69,8 +69,8 @@ def run_equity_sim(trades_df, start_bal, pos_size, max_pos, label,
                     regime_off_until = 'wait_neg'
                     continue
             if regime_off_until == 'wait_neg' and len(sp10) > 5:
-                sp5v = float(sp10.iloc[-6])
-                spy_5d = (float(sp10.iloc[-1]) - sp5v) / sp5v if sp5v > 0 else 0
+                sp5v = to_scalar(sp10.iloc[-6])
+                spy_5d = (to_scalar(sp10.iloc[-1]) - sp5v) / sp5v if sp5v > 0 else 0
                 if spy_5d < 0:
                     regime_off_until = None
                 else:
@@ -134,11 +134,11 @@ def run_equity_sim(trades_df, start_bal, pos_size, max_pos, label,
         for pos in positions:
             tk_p = price_dict.get(pos['ticker']) if price_dict else None
             if tk_p is not None:
-                px_t = (tk_p['Close'] if 'Close' in tk_p.columns
+                px_t = ensure_series(tk_p['Close'] if 'Close' in tk_p.columns
                         else tk_p.iloc[:, 0])
                 cp = px_t.asof(dt)
                 if pd.notna(cp):
-                    pv += (pos['entry_p'] - float(cp)) * pos['shares']
+                    pv += (pos['entry_p'] - to_scalar(cp)) * pos['shares']
         teq = cash + sum(p['entry_val'] for p in positions) + pv
         daily_eq.append({'date': dt, 'equity': teq, 'n_pos': len(positions)})
 
@@ -159,7 +159,7 @@ def run_equity_sim(trades_df, start_bal, pos_size, max_pos, label,
     calmar = ann / abs(max_dd_pct) if max_dd < 0 else np.nan
     return {
         'label': label, 'start': start_bal,
-        'end': float(eq['equity'].iloc[-1]),
+        'end': to_scalar(eq['equity'].iloc[-1]),
         'ret': (eq['equity'].iloc[-1] - start_bal) / start_bal,
         'ann': ann, 'max_dd': max_dd, 'max_dd_pct': max_dd_pct,
         'calmar': calmar, 'trades': len(trade_log),
@@ -192,11 +192,11 @@ def run_equity_scenarios(data_bundle):
         for q in bad_qs:
             try:
                 qp = pd.Period(q)
-                spy_q = spy_close.loc[qp.start_time:qp.end_time]
+                spy_q = ensure_series(spy_close.loc[qp.start_time:qp.end_time])
                 for thr_pct in [0.03, 0.04, 0.05]:
                     for i in range(10, len(spy_q)):
-                        r10 = ((float(spy_q.iloc[i]) - float(spy_q.iloc[i - 10]))
-                               / float(spy_q.iloc[i - 10]))
+                        r10 = ((to_scalar(spy_q.iloc[i]) - to_scalar(spy_q.iloc[i - 10]))
+                               / to_scalar(spy_q.iloc[i - 10]))
                         if r10 > thr_pct:
                             day_num = i
                             print(f"    {q} @ {thr_pct:.0%}: triggers day {day_num} "
@@ -326,7 +326,7 @@ def run_equity_scenarios(data_bundle):
             if tk not in price_dict:
                 continue
             pxd2 = price_dict[tk]
-            px2 = pxd2['Close'] if 'Close' in pxd2.columns else pxd2.iloc[:, 0]
+            px2 = ensure_series(pxd2['Close'] if 'Close' in pxd2.columns else pxd2.iloc[:, 0])
             ed = t['entry_date']
             if ed not in px2.index:
                 continue
@@ -334,7 +334,7 @@ def run_equity_scenarios(data_bundle):
             # Check if stock drops 2% in next 5 days
             confirmed = False
             for di in range(1, min(6, len(px2) - si)):
-                if (float(px2.iloc[si + di]) - float(px2.iloc[si])) / float(px2.iloc[si]) <= -0.02:
+                if (to_scalar(px2.iloc[si + di]) - to_scalar(px2.iloc[si])) / to_scalar(px2.iloc[si]) <= -0.02:
                     confirmed = True
                     break
             if confirmed:
