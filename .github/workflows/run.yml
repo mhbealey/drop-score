@@ -1,4 +1,4 @@
-name: Run Drop Score v17
+name: Run Drop Score v18
 
 on:
   push:
@@ -35,6 +35,17 @@ jobs:
 
       - name: Run main.py
         run: python main.py
+
+      - name: Share results
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          LATEST=$(ls -t results/*.txt | head -1)
+          if [ -f "$LATEST" ]; then
+            URL=$(gh gist create "$LATEST" --public 2>&1 | tail -1)
+            echo "📋 RESULTS: $URL"
+          fi
+        if: always()
 
       - name: Upload results
         if: always()
