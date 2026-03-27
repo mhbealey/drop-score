@@ -22,72 +22,6 @@ from config import (
 from utils import strip_tz, elapsed
 
 
-# ── Known delisted / defunct tickers to skip before yFinance downloads ──
-# Sourced from prior run logs: these return "No data found" or 404 from yFinance.
-# Skipping them saves ~15 minutes of wasted API calls per run.
-_DELISTED_TICKERS_PATH = os.path.join(os.path.dirname(__file__), 'data', 'delisted_tickers.txt')
-
-def _load_delisted_tickers():
-    """Load delisted ticker set from file, or return built-in set."""
-    # Try external file first
-    if os.path.exists(_DELISTED_TICKERS_PATH):
-        try:
-            with open(_DELISTED_TICKERS_PATH) as f:
-                return {line.strip() for line in f if line.strip() and not line.startswith('#')}
-        except Exception:
-            pass
-    # Built-in set of ~800 known-delisted tickers from SimFin universe
-    return _BUILTIN_DELISTED
-
-_BUILTIN_DELISTED = {
-    # Major delistings / M&A / bankruptcies that appear in SimFin but have no yFinance data
-    'AAXN', 'ABMD', 'ACGL', 'ACIW', 'ADPT', 'AEGN', 'AEIS', 'AFSI', 'AGN',
-    'AIMC', 'AKRX', 'ALDR', 'ALLY', 'ALXN', 'AMAG', 'AMED', 'AMRX', 'ANDV',
-    'ANSS', 'APOG', 'APPS', 'ARRS', 'ARWR', 'ASNA', 'ASTE', 'ATHN', 'ATVI',
-    'AVGO', 'AXE', 'BBBY', 'BCEI', 'BKS', 'BLKB', 'BNED', 'BOFI', 'BOJA',
-    'BRCD', 'BREW', 'BRS', 'CA', 'CACI', 'CAKE', 'CALM', 'CARA', 'CATM',
-    'CBOE', 'CBS', 'CDEV', 'CDK', 'CELG', 'CERN', 'CEVA', 'CFG', 'CHTR',
-    'CLDR', 'CLF', 'CLGX', 'CLVS', 'CNC', 'CNDT', 'CNHI', 'COHR', 'COMM',
-    'CORE', 'CPRT', 'CREE', 'CSOD', 'CTRP', 'CTSH', 'CTXS', 'CY', 'CYBR',
-    'DATA', 'DENN', 'DISCA', 'DISCK', 'DISH', 'DNKN', 'DNOW', 'DNR', 'DRIV',
-    'DXC', 'ECHO', 'ECOL', 'ECPG', 'EGOV', 'EGP', 'ELLI', 'ENDP', 'ENPH',
-    'ENV', 'EPAM', 'EQIX', 'ESNT', 'ETFC', 'EVBG', 'EVHC', 'EVOP', 'EXAS',
-    'EXEL', 'EXLS', 'EXPE', 'EXPR', 'FAF', 'FANG', 'FBHS', 'FCNCA', 'FISV',
-    'FIVE', 'FIX', 'FIVN', 'FLIR', 'FLT', 'FMBI', 'FNF', 'FNSR', 'FOLD',
-    'FOXF', 'FRGI', 'FRPT', 'FTNT', 'GCI', 'GDDY', 'GLUU', 'GMED', 'GNC',
-    'GNRC', 'GNW', 'GPOR', 'GRUB', 'GTT', 'GWR', 'HAIN', 'HBI', 'HCA',
-    'HDS', 'HELE', 'HFC', 'HMHC', 'HMSY', 'HOME', 'HPE', 'HQY', 'HRB',
-    'HSIC', 'HZNP', 'IAC', 'IBKR', 'ICUI', 'IDCC', 'IDXX', 'IEC', 'IIVI',
-    'ILMN', 'IMPV', 'INGR', 'INST', 'IPHI', 'IRBT', 'IRDM', 'ISBC', 'ISRG',
-    'ITT', 'JACK', 'JBHT', 'JBLU', 'JBT', 'JCOM', 'JKHY', 'JLL', 'JNPR',
-    'KAR', 'KBR', 'KEYS', 'KFY', 'KNX', 'KRNY', 'KSU', 'LAMR', 'LAUR',
-    'LBRDA', 'LBRDK', 'LDOS', 'LFUS', 'LGIH', 'LGND', 'LHCG', 'LII', 'LIVN',
-    'LNCE', 'LNTH', 'LOGM', 'LOPE', 'LPLA', 'LPSN', 'LSCC', 'LSTR', 'LULU',
-    'LUMN', 'LYFT', 'MANH', 'MANT', 'MATX', 'MAXR', 'MBIN', 'MBUU', 'MCFT',
-    'MCHP', 'MDCO', 'MDLA', 'MDSO', 'MDRX', 'MEDP', 'MESA', 'MFNX', 'MGLN',
-    'MIDD', 'MINI', 'MKSI', 'MKTX', 'MMSI', 'MNST', 'MPWR', 'MRCY', 'MRVL',
-    'MSCC', 'MSCI', 'MSTR', 'MTCH', 'MTN', 'MTOR', 'MUSA', 'MXIM', 'MYOK',
-    'MYRG', 'NATI', 'NBIX', 'NCLH', 'NDLS', 'NDSN', 'NEOG', 'NLOK', 'NMIH',
-    'NOVT', 'NPTN', 'NSTG', 'NTCT', 'NTNX', 'NUVA', 'NVCR', 'NXPI', 'NXST',
-    'OLED', 'OLLI', 'ONCE', 'OSIS', 'OTEX', 'PACW', 'PAGS', 'PAHC', 'PANW',
-    'PAYC', 'PCTY', 'PEGA', 'PENN', 'PH', 'PINC', 'PLNT', 'PLUS', 'PNFP',
-    'PRAA', 'PRFT', 'PRGO', 'PRLB', 'PRMW', 'PRSC', 'PSTG', 'PTCT', 'PTC',
-    'QLYS', 'RARE', 'RCII', 'RDFN', 'REGI', 'REXR', 'RGLD', 'RH', 'RNG',
-    'RNST', 'ROIC', 'ROLL', 'RPD', 'RPM', 'RVNC', 'SABR', 'SAIA', 'SAIL',
-    'SANM', 'SBNY', 'SCHN', 'SCWX', 'SEDG', 'SFLY', 'SGH', 'SGMS', 'SHAK',
-    'SHOP', 'SIGI', 'SITE', 'SIVB', 'SLAB', 'SLM', 'SMPL', 'SNDR', 'SNPS',
-    'SODA', 'SPLK', 'SPSC', 'SQ', 'SRCL', 'SRPT', 'STE', 'STMP', 'STNE',
-    'STRA', 'STX', 'SUPN', 'SWCH', 'SYMC', 'SYNH', 'TBBK', 'TBIO', 'TCBI',
-    'TECH', 'TECD', 'TENB', 'TER', 'TGNA', 'THO', 'TLND', 'TLRA', 'TLRY',
-    'TMUS', 'TNET', 'TPTX', 'TREE', 'TREX', 'TRIP', 'TRMB', 'TRMK', 'TRUP',
-    'TSCO', 'TTEC', 'TTGT', 'TTWO', 'TWLO', 'TWOU', 'TXRH', 'TYL', 'UBSI',
-    'UCTT', 'UFPI', 'ULTA', 'UMBF', 'UPLD', 'USFD', 'UTHR', 'VALE', 'VAPO',
-    'VBTX', 'VCYT', 'VEEV', 'VIAV', 'VIRT', 'VRNS', 'VRNT', 'VRSK', 'VRSN',
-    'VRTX', 'VSAT', 'VSTO', 'WBT', 'WCG', 'WDAY', 'WDC', 'WEX', 'WING',
-    'WIRE', 'WK', 'WLTW', 'WMGI', 'WMS', 'WOLF', 'WRLD', 'WSBC', 'WSO',
-    'WTFC', 'WWD', 'WYND', 'XEL', 'XLNX', 'XPO', 'XRAY', 'ZBH', 'ZBRA',
-    'ZEN', 'ZION', 'ZS', 'ZTS',
-}
 
 
 def _yf_download_with_retry(tickers, max_retries=3, base_delay=5, **kwargs):
@@ -237,8 +171,7 @@ def load_sector_map(cache, cache_path):
 
 
 def build_universe(df_inc, df_bal, df_cf, sector_map):
-    """Build filtered stock universe, excluding known-delisted tickers."""
-    delisted = _load_delisted_tickers()
+    """Build filtered stock universe (exclude Financials only)."""
     cutoff = pd.Timestamp.now() - pd.DateOffset(years=4)
     u_raw = set(df_inc.groupby('Ticker').size()[lambda x: x >= 8].index)
     for ds in [df_bal, df_cf]:
@@ -248,19 +181,32 @@ def build_universe(df_inc, df_bal, df_cf, sector_map):
         if df_inc.loc[tk].index.max() >= cutoff
         if tk in df_inc.index.get_level_values('Ticker')
     )
-    pre_filter = len(universe_all)
-    universe = [tk for tk in universe_all
-                if sector_map.get(tk) not in ('Financial',)
-                and tk not in delisted]
-    n_delisted = pre_filter - len([tk for tk in universe_all
-                                    if sector_map.get(tk) not in ('Financial',)])
-    n_skipped = len([tk for tk in universe_all
-                     if sector_map.get(tk) not in ('Financial',)
-                     and tk in delisted])
-    print(f"  Universe: {pre_filter} raw -> {len(universe)} "
-          f"(excl {pre_filter - len(universe)} financial/delisted, "
-          f"{n_skipped} known-delisted skipped)")
+    universe = [tk for tk in universe_all if sector_map.get(tk) not in ('Financial',)]
+    n_fin = len(universe_all) - len(universe)
+    print(f"  Universe: {len(universe_all)} raw -> {len(universe)} (excl {n_fin} financial)")
     return universe
+
+
+def _classify_tickers(price_dict, months_threshold=6):
+    """Classify tickers as tradeable (recent prices) vs delisted (historical only).
+
+    Delisted tickers with historical prices are kept for training
+    (survivorship bias correction) but excluded from walk-forward trade generation.
+    """
+    cutoff = pd.Timestamp.now() - pd.DateOffset(months=months_threshold)
+    tradeable = set()
+    delisted_with_history = set()
+    for tk, pxd in price_dict.items():
+        if tk in ('SPY', '^VIX') or tk in SECTOR_ETFS:
+            continue
+        if len(pxd) == 0:
+            continue
+        last_date = pxd.index.max()
+        if last_date >= cutoff:
+            tradeable.add(tk)
+        else:
+            delisted_with_history.add(tk)
+    return tradeable, delisted_with_history
 
 
 def download_prices(universe, cache, cache_path):
@@ -379,15 +325,23 @@ def load_all_data():
     universe = build_universe(df_inc, df_bal, df_cf, sector_map)
     price_dict, unavail = download_prices(universe, cache, cache_path)
 
-    # Finalise universe
+    # Finalise universe — include delisted tickers with history for training
     universe = sorted(
         set(universe) & set(price_dict.keys())
         - {'SPY', '^VIX'}
         - set(SECTOR_ETFS.keys())
     )
+
+    # Classify: tradeable (recent prices) vs delisted (historical only)
+    tradeable, delisted_with_history = _classify_tickers(price_dict)
+    tradeable_tickers = set(universe) & tradeable
+
     spy_close, spy_ret, vix_series, sector_etf_ret = derive_benchmarks(price_dict)
 
-    print(f"  Universe: {len(universe)} | {elapsed()}")
+    print(f"  Universe: {len(universe)} for training, "
+          f"{len(tradeable_tickers)} tradeable for walk-forward "
+          f"({len(delisted_with_history)} delisted with history)")
+    print(f"  {elapsed()}")
     print()
 
     return dict(
@@ -397,6 +351,7 @@ def load_all_data():
         df_q=df_q, df_dev=df_dev, df_hold=df_hold, df_daily=df_daily,
         df_inc=df_inc, df_bal=df_bal, df_cf=df_cf,
         sector_map=sector_map, universe=universe,
+        tradeable_tickers=tradeable_tickers,
         price_dict=price_dict, unavail=unavail,
         spy_close=spy_close, spy_ret=spy_ret,
         vix_series=vix_series, sector_etf_ret=sector_etf_ret,
