@@ -66,6 +66,7 @@ SECTOR_ETFS = {
     'XLRE': 'Real Estate', 'XLC': 'Communication',
 }
 FORCE_RECOMPUTE = False
+FORCE_TARGET = "voladj_2sig_63d"  # Override Pareto target selection for walkforward validation
 
 # ── Timing ──
 t_start = time.time()

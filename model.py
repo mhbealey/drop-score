@@ -11,7 +11,7 @@ import lightgbm as lgb
 from sklearn.metrics import roc_auc_score
 from tqdm import tqdm
 
-from config import N_FOLDS, N_BOOT, MIN_K
+from config import N_FOLDS, N_BOOT, MIN_K, FORCE_TARGET
 from utils import clean_X, elapsed
 
 
@@ -149,6 +149,18 @@ def train_all_targets(df_dev, fcols_q, fill_meds_q, tcols, tgt_rates, K):
             v_results[t] = r
 
     best_v_t = max(v_results, key=lambda k: v_results[k]['mauc'])
+
+    # Override with FORCE_TARGET if set and available
+    if FORCE_TARGET and FORCE_TARGET in v_results:
+        print(f"\n  FORCE_TARGET override: {FORCE_TARGET} "
+              f"(AUC={v_results[FORCE_TARGET]['mauc']:.3f}) "
+              f"instead of {best_v_t} "
+              f"(AUC={v_results[best_v_t]['mauc']:.3f})")
+        best_v_t = FORCE_TARGET
+    elif FORCE_TARGET and FORCE_TARGET not in v_results:
+        print(f"\n  WARNING: FORCE_TARGET={FORCE_TARGET} not in trained targets, "
+              f"using Pareto best: {best_v_t}")
+
     best_v_r = v_results[best_v_t]
     topf_v = best_v_r['imp'].index[:K].tolist()
 

@@ -12,7 +12,7 @@ from tqdm import tqdm
 from config import (
     VOL_FLOOR, SECTOR_CAP, REGIME_SPY_MAX, REGIME_VIX_MIN,
     SLIPPAGE, STOP_LOSS, PROFIT_TARGET, TRAILING_STOP,
-    SKIP_RET5D_DOWN, SKIP_VOL_PCT, ENTRY_DELAY,
+    SKIP_RET5D_DOWN, SKIP_VOL_PCT, ENTRY_DELAY, FORCE_TARGET,
 )
 from utils import clean_X, elapsed, to_scalar, ensure_series
 
@@ -35,13 +35,21 @@ def run_walkforward(data_bundle):
     vix_series = data_bundle['vix_series']
 
     quarters = sorted(df_dev['report_date'].dt.to_period('Q').unique())
-    wf_tgt = best_v_t
-    ex_cands = [t for t in v_results if t.startswith('exdrop_')]
-    if ex_cands:
-        bex = max(ex_cands, key=lambda k: v_results[k]['mauc'])
-        if v_results[bex]['mauc'] > 0.70:
-            wf_tgt = bex
-    print(f"  Target: {wf_tgt} (AUC={v_results[wf_tgt]['mauc']:.3f})")
+    # Use FORCE_TARGET if set and available, otherwise fall back to best/exdrop logic
+    if FORCE_TARGET and FORCE_TARGET in v_results:
+        wf_tgt = FORCE_TARGET
+        print(f"  Target (forced): {wf_tgt} (AUC={v_results[wf_tgt]['mauc']:.3f})")
+    else:
+        wf_tgt = best_v_t
+        ex_cands = [t for t in v_results if t.startswith('exdrop_')]
+        if ex_cands:
+            bex = max(ex_cands, key=lambda k: v_results[k]['mauc'])
+            if v_results[bex]['mauc'] > 0.70:
+                wf_tgt = bex
+        if FORCE_TARGET:
+            print(f"  WARNING: FORCE_TARGET={FORCE_TARGET} not available, "
+                  f"using {wf_tgt}")
+        print(f"  Target: {wf_tgt} (AUC={v_results[wf_tgt]['mauc']:.3f})")
 
     all_wf_trades = []
     for qi in range(3, len(quarters)):
