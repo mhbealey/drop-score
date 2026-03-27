@@ -5,6 +5,7 @@ DROP SCORE v17 — CONVICTION + REGIME + REALISM
 Truncated holdout. Staged entry diagnostic. Tech-only WF. Earnings proximity.
 """
 import subprocess, sys, os, time, warnings, random, pickle
+from datetime import datetime
 
 # ── Install dependencies if needed ──
 def install(pkg):
@@ -25,9 +26,27 @@ warnings.filterwarnings('ignore')
 random.seed(42)
 np.random.seed(42)
 
+# ── Tee stdout to results/ ──
+os.makedirs('results', exist_ok=True)
+_log_path = os.path.join('results', f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+
+class _Tee:
+    def __init__(self, *streams):
+        self.streams = streams
+    def write(self, data):
+        for s in self.streams:
+            s.write(data)
+            s.flush()
+    def flush(self):
+        for s in self.streams:
+            s.flush()
+
+_log_file = open(_log_path, 'w')
+sys.stdout = _Tee(sys.__stdout__, _log_file)
+
 # ── Project modules ──
 from config import (
-    N_BOOT, t_start,
+    N_BOOT, VOL_FLOOR, t_start,
 )
 from utils import elapsed
 from data import load_all_data
@@ -171,7 +190,6 @@ if len(wf_top) > 0:
               f"${r['pnl_per_share']:+.2f}/sh ({r['pnl_pct']*100:+.1f}%)")
 
 # Save to Drive
-from config import VOL_FLOOR
 with open(os.path.join(cache_dir, 'v17_results.pkl'), 'wb') as f:
     pickle.dump({
         'best_v_t': best_v_t, 'best_v_r': best_v_r, 'topf_v': topf_v, 'K': data['K'],
@@ -187,3 +205,9 @@ with open(os.path.join(cache_dir, 'v17_results.pkl'), 'wb') as f:
 print(f"\nTotal: {(time.time()-t_start)/60:.1f} min")
 print(f"Next run (voladj cached, skip list active): ~9 min")
 print("Drop Score v17 complete.")
+
+# Close log
+print(f"\nLog saved to {_log_path}")
+sys.stdout = sys.__stdout__
+_log_file.close()
+print(f"Log saved to {_log_path}")
