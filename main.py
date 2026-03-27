@@ -28,7 +28,7 @@ np.random.seed(42)
 
 # ── Tee stdout to results/ ──
 os.makedirs('results', exist_ok=True)
-_log_path = os.path.join('results', f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+_log_path = os.path.join('results', f"run_{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.txt")
 
 class _Tee:
     def __init__(self, *streams):

@@ -1,0 +1,44 @@
+name: Run Drop Score v17
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      SIMFIN_KEY: ${{ secrets.SIMFIN_KEY }}
+      FMP_KEY: ${{ secrets.FMP_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache data directory
+        uses: actions/cache@v4
+        with:
+          path: data/
+          key: drop-score-data-${{ hashFiles('data.py') }}
+          restore-keys: |
+            drop-score-data-
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run main.py
+        run: python main.py
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ github.sha }}
+          path: results/
