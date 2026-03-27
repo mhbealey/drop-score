@@ -67,8 +67,8 @@ def run_walkforward(data_bundle):
                     skip = f"SPY +{s21:.1%}"
         if vix_series is not None and not skip:
             va = vix_series.loc[:test_q.start_time + pd.Timedelta(days=10)]
-            if len(va) > 0 and float(va.iloc[-1]) < REGIME_VIX_MIN:
-                skip = f"VIX={float(va.iloc[-1]):.0f}"
+            if len(va) > 0 and float(va.values[-1]) < REGIME_VIX_MIN:
+                skip = f"VIX={float(va.values[-1]):.0f}"
         if skip:
             print(f"    {test_q}: SKIP ({skip})")
             continue
