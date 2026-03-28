@@ -261,8 +261,25 @@ _primary = 'Full SimFin' if 'Full SimFin' in pipeline_results else (
 if _primary and elapsed_min < 80:
     _res = pipeline_results[_primary]
     # Bayesian optimization
+    _baseline_auc = _res.get('v_results', {}).get(
+        _res.get('best_v_t', ''), {}).get('mauc', 0.5)
     _res = run_bayesian_optimization(_res, n_trials=30, timeout=1200)
     pipeline_results[_primary] = _res
+
+    # If Optuna found better params (>0.01 AUC gain), retrain with them
+    _optuna_bp = _res.get('optuna_best_params')
+    _optuna_auc = _res.get('optuna_study')
+    if _optuna_bp and _optuna_auc:
+        _opt_val = _optuna_auc.best_value
+        if _opt_val - _baseline_auc > 0.01:
+            print(f"  Optuna improved AUC by {_opt_val - _baseline_auc:+.3f} — "
+                  f"params stored for next run")
+        else:
+            print(f"  Optuna improvement marginal ({_opt_val - _baseline_auc:+.3f}) — "
+                  f"keeping default params")
+            _res.pop('optuna_best_params', None)
+            pipeline_results[_primary] = _res
+
     # Bootstrap CIs on walk-forward top 25%
     _wf_top = _res.get('wf_top', pd.DataFrame())
     _boot = run_bootstrap_ci(_wf_top, n_boot=1000)
@@ -646,6 +663,18 @@ if primary_label:
     else:
         _checks["WF includes EDGAR-sourced trades"] = False
 
+    # Margin null rate check (Phase 7 key metrics)
+    for _feat_name in ['gross_margin', 'operating_margin']:
+        if _feat_name in data['df_dev'].columns:
+            _null_rate = data['df_dev'][_feat_name].isna().mean()
+            _checks[f"{_feat_name} null < 30%"] = _null_rate < 0.30
+
+    # Cash flow null rate
+    for _feat_name in ['cfo_to_revenue', 'fcf_margin']:
+        if _feat_name in data['df_dev'].columns:
+            _null_rate = data['df_dev'][_feat_name].isna().mean()
+            _checks[f"{_feat_name} null < 40%"] = _null_rate < 0.40
+
     # Bayesian opt
     _checks["Bayesian opt completed"] = 'optuna_study' in pipeline_results.get(_primary, {})
 
@@ -660,7 +689,7 @@ for _check, _passed in _checks.items():
 print("=" * 70)
 
 print(f"\nTotal: {(time.time()-t_start)/60:.1f} min")
-print("Drop Score v18.1 complete.")
+print("Drop Score v18.2 complete.")
 
 # Close log
 print(f"\nLog saved to {_log_path}")

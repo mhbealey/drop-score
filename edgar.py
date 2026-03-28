@@ -658,12 +658,20 @@ def run_feature_qa(df_dev, df_hold, edgar_tickers, fcols_q):
             total_inf += n_inf
     print(f"  Total inf values across features: {total_inf}")
 
-    # Target distribution by source
+    # Target distribution by source — flag large discrepancies
     target_cols = [c for c in df_dev.columns if c.startswith('exdrop_')]
+    base_rate_warnings = 0
     for tgt in target_cols[:3]:
         sf_rate = dev_simfin[tgt].mean() if tgt in dev_simfin.columns and len(dev_simfin) > 0 else 0
         ed_rate = dev_edgar[tgt].mean() if tgt in dev_edgar.columns and len(dev_edgar) > 0 else 0
-        print(f"  {tgt}: SimFin rate={sf_rate:.3f}, EDGAR rate={ed_rate:.3f}")
+        ratio = ed_rate / sf_rate if sf_rate > 0 else float('inf')
+        flag = ' ⚠ RATE GAP' if ratio > 2.5 or ratio < 0.4 else ''
+        print(f"  {tgt}: SimFin rate={sf_rate:.3f}, EDGAR rate={ed_rate:.3f} (ratio={ratio:.1f}x){flag}")
+        if ratio > 2.5 or ratio < 0.4:
+            base_rate_warnings += 1
+    if base_rate_warnings:
+        print(f"  NOTE: EDGAR tickers (S&P 400/600) tend to be smaller/mid-cap")
+        print(f"        Higher ex-div drop rates are expected for smaller companies")
 
     print(f"  ═══ END FEATURE QA ═══\n")
 

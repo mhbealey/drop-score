@@ -15,7 +15,7 @@ from config import N_FOLDS, N_BOOT, MIN_K, TRADING_TARGET, TRADING_HOLD, ENTRY_M
 from utils import clean_X, elapsed
 
 
-def run_model(dframe, fc, tgt, meds, nf=4, nb=500, k=10):
+def run_model(dframe, fc, tgt, meds, nf=4, nb=500, k=10, optuna_params=None):
     vd2 = dframe.dropna(subset=[tgt])
     X = clean_X(vd2, fc, meds)
     y = vd2[tgt].fillna(0).astype(int)
@@ -24,6 +24,25 @@ def run_model(dframe, fc, tgt, meds, nf=4, nb=500, k=10):
     fs = len(X) // (nf + 1)
     folds, aimps = [], []
     pred_map = {}
+
+    # Extract Optuna params if available, else use defaults
+    op = optuna_params or {}
+    xgb_depth = op.get('xgb_max_depth', 5)
+    xgb_lr = op.get('xgb_lr', 0.05)
+    xgb_n_est = op.get('xgb_n_est', 500)
+    xgb_subsample = op.get('xgb_subsample', 0.8)
+    xgb_colsample = op.get('xgb_colsample', 0.8)
+    xgb_alpha = op.get('xgb_alpha', 0.1)
+    xgb_lambda = op.get('xgb_lambda', 1.0)
+    lgb_depth = op.get('lgb_max_depth', 5)
+    lgb_lr = op.get('lgb_lr', 0.05)
+    lgb_n_est = op.get('lgb_n_est', 200)
+    lgb_subsample = op.get('lgb_subsample', 0.8)
+    lgb_colsample = op.get('lgb_colsample', 0.8)
+    lgb_alpha = op.get('lgb_alpha', 0.1)
+    lgb_lambda = op.get('lgb_lambda', 1.0)
+    xgb_weight = op.get('xgb_weight', 0.5)
+
     for fold in range(nf):
         ts = fs * (fold + 2)
         te = min(ts + fs, len(X))
@@ -45,22 +64,25 @@ def run_model(dframe, fc, tgt, meds, nf=4, nb=500, k=10):
         imp = pd.Series(sel.feature_importances_, index=fc)
         topk = imp.nlargest(k).index.tolist()
         mdl = xgb.XGBClassifier(
-            n_estimators=500, max_depth=5, learning_rate=0.05,
-            scale_pos_weight=sw2, subsample=0.8, colsample_bytree=0.8,
-            reg_alpha=0.1, reg_lambda=1.0,
+            n_estimators=xgb_n_est, max_depth=xgb_depth, learning_rate=xgb_lr,
+            scale_pos_weight=sw2, subsample=xgb_subsample,
+            colsample_bytree=xgb_colsample,
+            reg_alpha=xgb_alpha, reg_lambda=xgb_lambda,
             eval_metric='logloss', early_stopping_rounds=30,
             random_state=42, verbosity=0,
         )
         mdl.fit(Xtr[topk], ytr, eval_set=[(Xte2[topk], yte2)], verbose=False)
         try:
             lgb_m = lgb.LGBMClassifier(
-                n_estimators=200, max_depth=5, learning_rate=0.05,
-                scale_pos_weight=sw2, subsample=0.8, colsample_bytree=0.8,
-                reg_alpha=0.1, reg_lambda=1.0, random_state=42, verbosity=-1,
+                n_estimators=lgb_n_est, max_depth=lgb_depth, learning_rate=lgb_lr,
+                scale_pos_weight=sw2, subsample=lgb_subsample,
+                colsample_bytree=lgb_colsample,
+                reg_alpha=lgb_alpha, reg_lambda=lgb_lambda,
+                random_state=42, verbosity=-1,
             )
             lgb_m.fit(Xtr[topk], ytr)
-            yp2 = (0.5 * mdl.predict_proba(Xte2[topk])[:, 1]
-                   + 0.5 * lgb_m.predict_proba(Xte2[topk])[:, 1])
+            yp2 = (xgb_weight * mdl.predict_proba(Xte2[topk])[:, 1]
+                   + (1 - xgb_weight) * lgb_m.predict_proba(Xte2[topk])[:, 1])
         except Exception:
             lgb_m = None
             yp2 = mdl.predict_proba(Xte2[topk])[:, 1]
@@ -137,14 +159,19 @@ def pareto_optimise(df_dev, fcols_q, fill_meds_q, tcols):
     return K
 
 
-def train_all_targets(df_dev, fcols_q, fill_meds_q, tcols, tgt_rates, K):
+def train_all_targets(df_dev, fcols_q, fill_meds_q, tcols, tgt_rates, K,
+                      optuna_params=None):
     """Train models on all targets. Print results. Return v_results, best info."""
     t0 = time.time()
-    print("VULNERABILITY MODEL...")
+    label = "VULNERABILITY MODEL"
+    if optuna_params:
+        label += " (Optuna params)"
+    print(f"{label}...")
 
     v_results = {}
     for t in tqdm(tcols, desc="  Train"):
-        r = run_model(df_dev, fcols_q, t, fill_meds_q, N_FOLDS, N_BOOT, K)
+        r = run_model(df_dev, fcols_q, t, fill_meds_q, N_FOLDS, N_BOOT, K,
+                      optuna_params=optuna_params)
         if r:
             v_results[t] = r
 
@@ -279,10 +306,12 @@ def run_vulnerability_model(data_bundle):
     fill_meds_q = data_bundle['fill_meds_q']
     tcols = data_bundle['tcols']
     tgt_rates = data_bundle['tgt_rates']
+    optuna_params = data_bundle.get('optuna_best_params')
 
     K = pareto_optimise(df_dev, fcols_q, fill_meds_q, tcols)
     v_results, best_v_t, best_v_r, topf_v = train_all_targets(
         df_dev, fcols_q, fill_meds_q, tcols, tgt_rates, K,
+        optuna_params=optuna_params,
     )
 
     fundamental_only_tests(df_dev, fcols_q, fill_meds_q, v_results, best_v_t, K)
