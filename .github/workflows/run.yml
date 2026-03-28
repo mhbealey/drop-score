@@ -2,7 +2,8 @@ name: Run Drop Score v18
 
 on:
   push:
-    branches: [main]
+    branches: [main, claude/add-file-upload-9O4en]
+  workflow_dispatch:
 
 permissions:
   contents: write
