@@ -9,4 +9,3 @@ pandas
 numpy
 gdown
 lxml
-html5lib

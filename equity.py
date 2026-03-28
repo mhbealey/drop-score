@@ -204,7 +204,7 @@ def run_equity_scenarios(data_bundle):
                             break
                     else:
                         print(f"    {q} @ {thr_pct:.0%}: never triggers")
-            except:
+            except Exception:
                 pass
 
     # Run 3 account scenarios x medium regime check
@@ -287,20 +287,28 @@ def run_equity_scenarios(data_bundle):
         plt.tight_layout()
         try:
             plt.savefig(os.path.join(cache_dir, 'equity_v18.png'), dpi=150)
-        except:
+        except Exception:
             pass
         plt.show()
 
     print(f"  [{time.time()-t0:.0f}s] {elapsed()}")
     print()
 
-    # ── DIAGNOSTICS ──
+    data_bundle['eq_results'] = eq_results
+    data_bundle['best_sc'] = best_sc
+
+    _run_diagnostics(data_bundle, wf_top, all_wf_trades, best_sc, spy_close, price_dict)
+
+    return data_bundle
+
+
+def _run_diagnostics(data_bundle, wf_top, all_wf_trades, best_sc, spy_close, price_dict):
+    """Post-equity diagnostics: tech-only, staged entry, SPY corr, earnings proximity."""
     t0 = time.time()
     print("=" * 70)
     print("DIAGNOSTICS")
     print("=" * 70)
 
-    # Tech-only WF
     if len(wf_top) > 10 and 'sector' in wf_top.columns:
         tech = wf_top[wf_top['sector'] == 'Technology']
         if len(tech) > 10:
@@ -313,73 +321,86 @@ def run_equity_scenarios(data_bundle):
                       f"${r_tech['end']:,.0f} ({r_tech['ret']:+.0%}) "
                       f"DD={r_tech['max_dd_pct']:.0%} Cal={r_tech['calmar']:.2f}")
 
-    # Staged entry diagnostic
+    _staged_entry_diagnostic(all_wf_trades, price_dict)
+    _spy_correlation_diagnostic(best_sc, spy_close)
+    _earnings_proximity_diagnostic(data_bundle, wf_top)
+
+    print(f"  [{time.time()-t0:.0f}s] {elapsed()}")
+    print()
+
+
+def _staged_entry_diagnostic(all_wf_trades, price_dict):
+    """Compare immediate vs confirmed entry P&L."""
     print(f"\n  STAGED ENTRY (enter after 2% drop in 5d):")
-    if len(all_wf_trades) > 20:
-        immediate_pnl = []
-        confirmed_pnl = []
-        confirmed_count = 0
-        missed = 0
-        for t in all_wf_trades:
-            immediate_pnl.append(t['pnl_per_share'])
-            tk = t['ticker']
-            if tk not in price_dict:
-                continue
-            pxd2 = price_dict[tk]
-            px2 = ensure_series(pxd2['Close'] if 'Close' in pxd2.columns else pxd2.iloc[:, 0])
-            ed = t['entry_date']
-            if ed not in px2.index:
-                continue
-            si = px2.index.get_loc(ed)
-            # Check if stock drops 2% in next 5 days
-            confirmed = False
-            for di in range(1, min(6, len(px2) - si)):
-                if (to_scalar(px2.iloc[si + di]) - to_scalar(px2.iloc[si])) / to_scalar(px2.iloc[si]) <= -0.02:
-                    confirmed = True
-                    break
-            if confirmed:
-                confirmed_pnl.append(t['pnl_per_share'])
-                confirmed_count += 1
-            else:
-                missed += 1
-        if confirmed_count >= 10:
-            ia = np.array(immediate_pnl)
-            ca = np.array(confirmed_pnl)
-            print(f"    Immediate: n={len(ia)} win={(ia>0).mean():.0%} avg=${ia.mean():+.2f}/sh")
-            print(f"    Confirmed: n={len(ca)} win={(ca>0).mean():.0%} avg=${ca.mean():+.2f}/sh (missed {missed})")
+    if len(all_wf_trades) <= 20:
+        return
+    immediate_pnl = []
+    confirmed_pnl = []
+    confirmed_count = 0
+    missed = 0
+    for t in all_wf_trades:
+        immediate_pnl.append(t['pnl_per_share'])
+        tk = t['ticker']
+        if tk not in price_dict:
+            continue
+        pxd2 = price_dict[tk]
+        px2 = ensure_series(pxd2['Close'] if 'Close' in pxd2.columns else pxd2.iloc[:, 0])
+        ed = t['entry_date']
+        if ed not in px2.index:
+            continue
+        si = px2.index.get_loc(ed)
+        confirmed = False
+        for di in range(1, min(6, len(px2) - si)):
+            if (to_scalar(px2.iloc[si + di]) - to_scalar(px2.iloc[si])) / to_scalar(px2.iloc[si]) <= -0.02:
+                confirmed = True
+                break
+        if confirmed:
+            confirmed_pnl.append(t['pnl_per_share'])
+            confirmed_count += 1
+        else:
+            missed += 1
+    if confirmed_count >= 10:
+        ia = np.array(immediate_pnl)
+        ca = np.array(confirmed_pnl)
+        print(f"    Immediate: n={len(ia)} win={(ia>0).mean():.0%} avg=${ia.mean():+.2f}/sh")
+        print(f"    Confirmed: n={len(ca)} win={(ca>0).mean():.0%} avg=${ca.mean():+.2f}/sh (missed {missed})")
 
-    # SPY monthly correlation
-    if best_sc and 'eq_df' in best_sc and spy_close is not None:
-        eq = best_sc['eq_df'].copy()
-        eq['month'] = eq['date'].dt.to_period('M')
-        eq_monthly = eq.groupby('month')['equity'].agg(['first', 'last'])
-        eq_monthly['ret'] = (eq_monthly['last'] - eq_monthly['first']) / eq_monthly['first']
-        spy_monthly = spy_close.resample('ME').agg(['first', 'last'])
-        spy_monthly.columns = ['first', 'last']
-        spy_monthly['ret'] = (spy_monthly['last'] - spy_monthly['first']) / spy_monthly['first']
-        spy_monthly.index = spy_monthly.index.to_period('M')
-        common = eq_monthly.index.intersection(spy_monthly.index)
-        if len(common) > 5:
-            corr = np.corrcoef(
-                eq_monthly.loc[common, 'ret'].values,
-                spy_monthly.loc[common, 'ret'].values,
-            )[0, 1]
-            print(f"\n  SPY MONTHLY CORRELATION: {corr:.2f}")
-            if corr < -0.3:
-                print(f"    \u2192 Useful portfolio hedge")
-            elif abs(corr) < 0.2:
-                print(f"    \u2192 Market-neutral")
-            else:
-                print(f"    \u2192 Correlated with market (unexpected for short strategy)")
 
-    # Earnings proximity (try to download earnings dates)
+def _spy_correlation_diagnostic(best_sc, spy_close):
+    """Monthly correlation between equity curve and SPY."""
+    if not best_sc or 'eq_df' not in best_sc or spy_close is None:
+        return
+    eq = best_sc['eq_df'].copy()
+    eq['month'] = eq['date'].dt.to_period('M')
+    eq_monthly = eq.groupby('month')['equity'].agg(['first', 'last'])
+    eq_monthly['ret'] = (eq_monthly['last'] - eq_monthly['first']) / eq_monthly['first']
+    spy_monthly = spy_close.resample('ME').agg(['first', 'last'])
+    spy_monthly.columns = ['first', 'last']
+    spy_monthly['ret'] = (spy_monthly['last'] - spy_monthly['first']) / spy_monthly['first']
+    spy_monthly.index = spy_monthly.index.to_period('M')
+    common = eq_monthly.index.intersection(spy_monthly.index)
+    if len(common) > 5:
+        corr = np.corrcoef(
+            eq_monthly.loc[common, 'ret'].values,
+            spy_monthly.loc[common, 'ret'].values,
+        )[0, 1]
+        print(f"\n  SPY MONTHLY CORRELATION: {corr:.2f}")
+        if corr < -0.3:
+            print(f"    \u2192 Useful portfolio hedge")
+        elif abs(corr) < 0.2:
+            print(f"    \u2192 Market-neutral")
+        else:
+            print(f"    \u2192 Correlated with market (unexpected for short strategy)")
+
+
+def _earnings_proximity_diagnostic(data_bundle, wf_top):
+    """Earnings proximity analysis for walk-forward trades."""
     cache = data_bundle['cache']
     cache_path = data_bundle['cache_path']
     print(f"\n  EARNINGS PROXIMITY:")
     earn_dates = cache.get('earnings_dates', {})
     if not earn_dates and len(wf_top) > 0:
-        # Download for tickers in walk-forward
-        wf_tickers = list(wf_top['ticker'].unique())[:100]  # Cap at 100 to limit time
+        wf_tickers = list(wf_top['ticker'].unique())[:100]
         print(f"    Downloading earnings dates for {len(wf_tickers)} tickers...")
         for tk in wf_tickers:
             try:
@@ -392,11 +413,10 @@ def run_equity_scenarios(data_bundle):
                             earn_dates[tk] = ed_val.tolist()
                         else:
                             earn_dates[tk] = [ed_val]
-                # Also try earnings_dates attribute
                 ehist = tkr.earnings_dates
                 if ehist is not None and len(ehist) > 0:
                     earn_dates[tk] = sorted(ehist.index.tolist())
-            except:
+            except Exception:
                 pass
         cache['earnings_dates'] = earn_dates
         from data import save_cache
@@ -411,11 +431,10 @@ def run_equity_scenarios(data_bundle):
             ed = row['entry_date']
             if tk not in earn_dates:
                 continue
-            # Find next earnings after entry
             try:
                 tk_earns = [pd.Timestamp(e) for e in earn_dates[tk]]
                 tk_earns = [e for e in tk_earns if e >= ed]
-            except:
+            except Exception:
                 continue
             if not tk_earns:
                 continue
@@ -439,10 +458,3 @@ def run_equity_scenarios(data_bundle):
             print(f"    Insufficient earnings data (near={len(near_earn)}, far={len(far_earn)})")
     else:
         print(f"    No earnings dates available")
-
-    print(f"  [{time.time()-t0:.0f}s] {elapsed()}")
-    print()
-
-    data_bundle['eq_results'] = eq_results
-    data_bundle['best_sc'] = best_sc
-    return data_bundle

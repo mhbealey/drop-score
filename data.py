@@ -3,7 +3,7 @@ Data loading: SimFin fundamentals, multi-source price waterfall,
 sector mapping, pickle caching, universe construction,
 training/tradeable split, S&P index tickers.
 """
-import os, time, pickle, random, json, io
+import os, time, pickle, random, json
 import urllib.request
 import simfin as sf
 import yfinance as yf
@@ -228,7 +228,7 @@ def _yf_download_with_retry(tickers, max_retries=3, base_delay=5, **kwargs):
     return None
 
 
-def _add_price(price_dict, tk, df, min_rows=252):
+def _add_price(price_dict, tk, df, min_rows=60):
     """Add a ticker's price data to the dict if it has enough rows."""
     if df is None or len(df) < min_rows:
         return False
@@ -357,7 +357,7 @@ def download_all_prices(universe, cache, cache_path):
                 resp = urllib.request.urlopen(url, timeout=10)
                 raw = json.loads(resp.read())
                 hist = raw.get('historical', [])
-                if len(hist) > 252:
+                if len(hist) > 60:
                     df = pd.DataFrame(hist)
                     df['date'] = pd.to_datetime(df['date'])
                     df = df.set_index('date').sort_index()
@@ -422,15 +422,43 @@ def download_all_prices(universe, cache, cache_path):
 # ═══════════════════════════════════════════════════════════════
 
 def get_sp_index_tickers():
-    """S&P 400+600 tickers from fallback file."""
+    """S&P 400+600 tickers from Wikipedia, with fallback file."""
+    tickers = set()
+    urls = [
+        ('S&P 400', 'https://en.wikipedia.org/wiki/List_of_S%26P_400_companies'),
+        ('S&P 600', 'https://en.wikipedia.org/wiki/List_of_S%26P_600_companies'),
+    ]
+    for label, url in urls:
+        try:
+            tables = pd.read_html(url)
+            df = tables[0]
+            for col in df.columns:
+                if 'symbol' in str(col).lower() or 'ticker' in str(col).lower():
+                    syms = df[col].astype(str).str.strip().str.replace('.', '-', regex=False)
+                    tickers.update(syms)
+                    print(f"    {label}: {len(syms)} tickers from column '{col}'")
+                    break
+        except Exception as e:
+            print(f"    {label} scrape failed: {str(e)[:120]}")
+
+    if len(tickers) >= 100:
+        print(f"    S&P index total: {len(tickers)} unique tickers")
+        return tickers
+
+    # Fallback to local file if scrape failed or returned too few
+    print(f"    WARNING: Wikipedia scrape got only {len(tickers)} tickers, trying fallback file")
     fallback = os.path.join(os.path.dirname(__file__), 'data', 'sp_index_fallback.txt')
     if os.path.exists(fallback):
         with open(fallback) as f:
-            tickers = [t.strip() for line in f for t in line.split(',') if t.strip()]
-            print(f"    S&P index: {len(tickers)} tickers from fallback")
-            return set(tickers)
-    print("    WARNING: No S&P fallback file found")
-    return set()
+            fb_tickers = {t.strip().replace('.', '-') for line in f
+                          for t in line.split(',') if t.strip()}
+            tickers.update(fb_tickers)
+            print(f"    Fallback file: +{len(fb_tickers)} tickers, total now {len(tickers)}")
+    else:
+        print("    WARNING: No fallback file found either")
+
+    print(f"    S&P index total: {len(tickers)} unique tickers")
+    return tickers
 
 
 # ═══════════════════════════════════════════════════════════════

@@ -12,7 +12,7 @@ def install(pkg):
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", pkg])
 
 for pkg in ["simfin", "yfinance", "xgboost", "lightgbm", "scikit-learn",
-            "matplotlib", "tqdm", "lxml", "html5lib"]:
+            "matplotlib", "tqdm", "lxml"]:
     try:
         __import__(pkg.replace("-", "_"))
     except ImportError:
@@ -170,7 +170,7 @@ def holdout_eval(bundle, label):
                             and yh.values[valid][idx].sum() < len(idx)):
                         try:
                             hb.append(roc_auc_score(yh.values[valid][idx], hp[valid][idx]))
-                        except:
+                        except Exception:
                             pass
                 hcl = np.percentile(hb, 2.5) if hb else ho_auc
                 hch = np.percentile(hb, 97.5) if hb else ho_auc
@@ -204,8 +204,8 @@ if UNIVERSE_MODE in ("full", "both"):
 if UNIVERSE_MODE in ("sp_index", "both"):
     # Time budget: skip Universe B if >25 min already
     elapsed_min = (time.time() - t_start) / 60
-    if UNIVERSE_MODE == "both" and elapsed_min > 25:
-        print(f"\n  TIME BUDGET: {elapsed_min:.0f} min elapsed, skipping S&P index pipeline")
+    if UNIVERSE_MODE == "both" and elapsed_min > 40:
+        print(f"\n  TIME BUDGET: {elapsed_min:.0f} min elapsed (>40), skipping S&P index pipeline")
     else:
         print("\n" + "#" * 70)
         print("# UNIVERSE B: S&P 400+600 Index")
@@ -215,13 +215,16 @@ if UNIVERSE_MODE in ("sp_index", "both"):
             # Filter to tickers we have data for
             all_tickers = set(data['df_dev']['ticker'].unique())
             sp_overlap = sp_tickers & all_tickers
-            print(f"  S&P index overlap with our data: {len(sp_overlap)}/{len(sp_tickers)}")
-            if len(sp_overlap) >= 50:
-                result_b = run_pipeline(data, "S&P 400+600", ticker_subset=sp_overlap)
-                ho_b = holdout_eval(result_b, "S&P 400+600")
-                pipeline_results['S&P 400+600'] = result_b
-            else:
-                print(f"  Too few overlapping tickers ({len(sp_overlap)}), skipping")
+            # Also check overlap with price cache
+            price_overlap = sp_tickers & set(data['price_dict'].keys())
+            print(f"  S&P index: {len(sp_tickers)} tickers")
+            print(f"  Overlap with feature data: {len(sp_overlap)}/{len(sp_tickers)}")
+            print(f"  Overlap with price cache: {len(price_overlap)}/{len(sp_tickers)}")
+            if len(sp_overlap) < 200:
+                print(f"  WARNING: low overlap ({len(sp_overlap)} tickers), running anyway")
+            result_b = run_pipeline(data, "S&P 400+600", ticker_subset=sp_overlap)
+            ho_b = holdout_eval(result_b, "S&P 400+600")
+            pipeline_results['S&P 400+600'] = result_b
         else:
             print("  Could not get S&P index tickers, skipping")
 
@@ -497,7 +500,7 @@ if primary_label:
             valid = ~np.isnan(hp)
             if valid.sum() >= 20 and yh[valid].sum() >= 5:
                 ho_auc = roc_auc_score(yh[valid], hp[valid])
-    except:
+    except Exception:
         pass
 
     # Also get voladj AUC

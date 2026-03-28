@@ -61,12 +61,12 @@ def run_model(dframe, fc, tgt, meds, nf=4, nb=500, k=10):
             lgb_m.fit(Xtr[topk], ytr)
             yp2 = (0.5 * mdl.predict_proba(Xte2[topk])[:, 1]
                    + 0.5 * lgb_m.predict_proba(Xte2[topk])[:, 1])
-        except:
+        except Exception:
             lgb_m = None
             yp2 = mdl.predict_proba(Xte2[topk])[:, 1]
         try:
             tauc = roc_auc_score(yte2, yp2)
-        except:
+        except Exception:
             tauc = 0.5
         folds.append({'tauc': tauc, 'feats': topk, 'model': mdl, 'lgb_model': lgb_m})
         aimps.append(imp)
@@ -88,7 +88,7 @@ def run_model(dframe, fc, tgt, meds, nf=4, nb=500, k=10):
         if len(idx) > 0 and pl[idx].sum() > 0 and pl[idx].sum() < len(idx):
             try:
                 boots.append(roc_auc_score(pl[idx], pp[idx]))
-            except:
+            except Exception:
                 pass
     clo = np.percentile(boots, 2.5) if boots else mauc
     chi = np.percentile(boots, 97.5) if boots else mauc
@@ -128,7 +128,7 @@ def pareto_optimise(df_dev, fcols_q, fill_meds_q, tcols):
         m.fit(X_p.iloc[:sp][tn], y_p.iloc[:sp])
         try:
             a = roc_auc_score(y_p.iloc[sp:], m.predict_proba(X_p.iloc[sp:][tn])[:, 1])
-        except:
+        except Exception:
             a = 0.5
         pareto.append({'n': n, 'auc': a})
     pdf_p = pd.DataFrame(pareto)
@@ -224,7 +224,7 @@ def score_dev_holdout(df_dev, df_hold, fcols_q, fill_meds_q, best_v_r):
         hp = (0.5 * hp_xgb + 0.5 * lf['lgb_model'].predict_proba(Xh[lfeat])[:, 1]
               if lf.get('lgb_model') else hp_xgb)
         df_hold['vuln_score'] = hp
-    except:
+    except Exception:
         df_hold['vuln_score'] = np.nan
     return df_dev, df_hold, Xh
 
