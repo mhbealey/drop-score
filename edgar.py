@@ -1,0 +1,607 @@
+"""
+EDGAR fundamental data: XBRL field mapping, CIK lookup,
+quarterly fact extraction, gap-fill for SimFin-missing tickers.
+
+SEC EDGAR provides free, unlimited access to all US public company filings.
+Rate limit: 10 req/sec with proper User-Agent header.
+"""
+import os, time, json, pickle
+import urllib.request
+import pandas as pd
+import numpy as np
+
+
+# ═══════════════════════════════════════════════════════════════
+# SEC User-Agent (required by SEC EDGAR)
+# ═══════════════════════════════════════════════════════════════
+
+SEC_HEADERS = {'User-Agent': 'DropScore michael@dropscore.dev'}
+SEC_RATE_DELAY = 0.12  # 10 req/sec
+
+
+# ═══════════════════════════════════════════════════════════════
+# XBRL → SimFin field mapping
+# ═══════════════════════════════════════════════════════════════
+
+# Maps our internal field names to XBRL us-gaap tags (priority order).
+# First matching tag wins for each field.
+XBRL_TO_FIELD = {
+    'Revenue': [
+        'Revenues',
+        'RevenueFromContractWithCustomerExcludingAssessedTax',
+        'RevenueFromContractWithCustomerIncludingAssessedTax',
+        'SalesRevenueNet',
+        'SalesRevenueGoodsNet',
+        'SalesRevenueServicesNet',
+    ],
+    'Gross Profit': [
+        'GrossProfit',
+    ],
+    'Operating Income (Loss)': [
+        'OperatingIncomeLoss',
+    ],
+    'Net Income': [
+        'NetIncomeLoss',
+        'ProfitLoss',
+        'NetIncomeLossAvailableToCommonStockholdersBasic',
+    ],
+    'Interest Expense, Net': [
+        'InterestExpense',
+        'InterestExpenseDebt',
+    ],
+    'Total Assets': [
+        'Assets',
+    ],
+    'Total Equity': [
+        'StockholdersEquity',
+        'StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest',
+    ],
+    'Total Liabilities': [
+        'Liabilities',
+    ],
+    'Total Debt': [
+        'LongTermDebt',
+        'LongTermDebtAndCapitalLeaseObligations',
+        'DebtAndCapitalLeaseObligations',
+    ],
+    'Total Current Assets': [
+        'AssetsCurrent',
+    ],
+    'Total Current Liabilities': [
+        'LiabilitiesCurrent',
+    ],
+    'Cash, Cash Equivalents & Short Term Investments': [
+        'CashAndCashEquivalentsAtCarryingValue',
+        'CashCashEquivalentsAndShortTermInvestments',
+    ],
+    'Net Cash from Operating Activities': [
+        'NetCashProvidedByUsedInOperatingActivities',
+    ],
+    'Change in Fixed Assets & Intangibles': [
+        'PaymentsToAcquirePropertyPlantAndEquipment',
+        'PaymentsToAcquireProductiveAssets',
+    ],
+    'Shares (Diluted)': [
+        'WeightedAverageNumberOfDilutedSharesOutstanding',
+    ],
+    'Shares (Basic)': [
+        'WeightedAverageNumberOfShareOutstandingBasicAndDiluted',
+        'CommonStockSharesOutstanding',
+    ],
+    # Extra fields for richer features
+    'SGA': [
+        'SellingGeneralAndAdministrativeExpense',
+    ],
+    'R&D': [
+        'ResearchAndDevelopmentExpense',
+    ],
+    'Depreciation': [
+        'DepreciationDepletionAndAmortization',
+        'DepreciationAndAmortization',
+    ],
+    'Goodwill': [
+        'Goodwill',
+    ],
+    'Inventories': [
+        'InventoryNet',
+    ],
+    'Receivables': [
+        'AccountsReceivableNetCurrent',
+        'ReceivablesNetCurrent',
+    ],
+    'Payables': [
+        'AccountsPayableCurrent',
+    ],
+    'PPE': [
+        'PropertyPlantAndEquipmentNet',
+    ],
+    'Dividends Paid': [
+        'PaymentsOfDividends',
+        'PaymentsOfDividendsCommonStock',
+    ],
+}
+
+# Balance sheet fields are point-in-time (any filing period is ok).
+# Income/cash flow fields need quarterly duration (~90 days).
+BALANCE_SHEET_FIELDS = {
+    'Total Assets', 'Total Liabilities', 'Total Equity',
+    'Total Current Assets', 'Total Current Liabilities',
+    'Cash, Cash Equivalents & Short Term Investments',
+    'Total Debt', 'Goodwill', 'Inventories', 'Receivables',
+    'Payables', 'PPE',
+    'Shares (Diluted)', 'Shares (Basic)',
+}
+
+# SimFin core fields (must match for build_quarterly_row compatibility)
+SIMFIN_INCOME_FIELDS = {
+    'Revenue', 'Gross Profit', 'Operating Income (Loss)',
+    'Net Income', 'Interest Expense, Net',
+}
+SIMFIN_BALANCE_FIELDS = {
+    'Total Assets', 'Total Equity', 'Total Liabilities', 'Total Debt',
+    'Total Current Assets', 'Total Current Liabilities',
+    'Cash, Cash Equivalents & Short Term Investments',
+    'Shares (Diluted)', 'Shares (Basic)',
+}
+SIMFIN_CASHFLOW_FIELDS = {
+    'Net Cash from Operating Activities',
+    'Change in Fixed Assets & Intangibles',
+}
+
+
+# ═══════════════════════════════════════════════════════════════
+# CIK Lookup
+# ═══════════════════════════════════════════════════════════════
+
+def load_cik_map(cache_dir='data/'):
+    """Load or download SEC ticker→CIK mapping. Refresh if >30 days old."""
+    path = os.path.join(cache_dir, 'sec_cik_map.json')
+    if os.path.exists(path):
+        age_days = (time.time() - os.path.getmtime(path)) / 86400
+        if age_days < 30:
+            with open(path) as f:
+                return json.load(f)
+
+    print("  Downloading SEC CIK map...")
+    url = 'https://www.sec.gov/files/company_tickers.json'
+    req = urllib.request.Request(url, headers=SEC_HEADERS)
+    resp = urllib.request.urlopen(req, timeout=30)
+    raw = json.loads(resp.read())
+
+    cik_map = {}
+    for entry in raw.values():
+        ticker = entry['ticker'].upper().replace('.', '-')
+        cik = str(entry['cik_str']).zfill(10)
+        cik_map[ticker] = cik
+
+    os.makedirs(cache_dir, exist_ok=True)
+    with open(path, 'w') as f:
+        json.dump(cik_map, f)
+    print(f"  CIK map: {len(cik_map)} tickers")
+    return cik_map
+
+
+# ═══════════════════════════════════════════════════════════════
+# EDGAR Fact Fetching
+# ═══════════════════════════════════════════════════════════════
+
+def _fetch_company_facts(cik):
+    """Fetch all XBRL facts for a company from EDGAR."""
+    url = f'https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json'
+    req = urllib.request.Request(url, headers=SEC_HEADERS)
+    resp = urllib.request.urlopen(req, timeout=15)
+    return json.loads(resp.read())
+
+
+# ═══════════════════════════════════════════════════════════════
+# Quarterly Parsing
+# ═══════════════════════════════════════════════════════════════
+
+def parse_edgar_facts(facts_json, ticker):
+    """Extract quarterly financial data from EDGAR company facts.
+
+    Returns dict: {(ticker, end_date_str): {field: value, 'filed': date_str}}
+
+    Key logic:
+    - Balance sheet items: point-in-time, take value at period end
+    - Income/cash flow items: only take quarterly duration (60-115 days)
+    - 10-Q and 10-K filings only
+    - First matching XBRL tag wins per field (no double-counting)
+    """
+    us_gaap = facts_json.get('facts', {}).get('us-gaap', {})
+    if not us_gaap:
+        return {}
+
+    quarterly_data = {}  # {(ticker, end_date): {field: value, 'filed': str}}
+
+    for simfin_field, xbrl_tags in XBRL_TO_FIELD.items():
+        is_bs = simfin_field in BALANCE_SHEET_FIELDS
+
+        for tag_name in xbrl_tags:
+            if tag_name not in us_gaap:
+                continue
+
+            units = us_gaap[tag_name].get('units', {})
+            # Financial values in USD, share counts in 'shares'
+            for unit_type in ['USD', 'shares']:
+                if unit_type not in units:
+                    continue
+
+                for entry in units[unit_type]:
+                    form = entry.get('form', '')
+                    if form not in ('10-Q', '10-K'):
+                        continue
+
+                    end = entry.get('end', '')
+                    start = entry.get('start', '')
+                    filed = entry.get('filed', '')
+                    val = entry.get('val')
+
+                    if not end or val is None:
+                        continue
+
+                    key = (ticker, end)
+
+                    if is_bs:
+                        # Balance sheet: take value at period end
+                        if key not in quarterly_data:
+                            quarterly_data[key] = {'filed': filed}
+                        if simfin_field not in quarterly_data[key]:
+                            quarterly_data[key][simfin_field] = val
+                    else:
+                        # Income/cash flow: only quarterly duration
+                        if not start:
+                            continue
+                        try:
+                            days = (pd.to_datetime(end) - pd.to_datetime(start)).days
+                        except Exception:
+                            continue
+                        if 60 <= days <= 115:
+                            if key not in quarterly_data:
+                                quarterly_data[key] = {'filed': filed}
+                            if simfin_field not in quarterly_data[key]:
+                                quarterly_data[key][simfin_field] = val
+
+            break  # First matching tag wins, don't double-count
+
+    return quarterly_data
+
+
+# ═══════════════════════════════════════════════════════════════
+# Build SimFin-compatible DataFrames from EDGAR data
+# ═══════════════════════════════════════════════════════════════
+
+def _edgar_to_simfin_frames(all_quarterly_data):
+    """Convert parsed EDGAR data into 3 SimFin-compatible MultiIndex DataFrames.
+
+    Returns (df_inc, df_bal, df_cf) with MultiIndex (Ticker, Report Date).
+    """
+    inc_rows = []
+    bal_rows = []
+    cf_rows = []
+
+    for (ticker, end_date), fields in all_quarterly_data.items():
+        try:
+            rd = pd.Timestamp(end_date)
+        except Exception:
+            continue
+
+        # Income statement fields
+        inc_row = {'Ticker': ticker, 'Report Date': rd}
+        has_inc = False
+        for f in SIMFIN_INCOME_FIELDS:
+            if f in fields:
+                inc_row[f] = fields[f]
+                has_inc = True
+            else:
+                inc_row[f] = np.nan
+        if has_inc:
+            inc_rows.append(inc_row)
+
+        # Balance sheet fields
+        bal_row = {'Ticker': ticker, 'Report Date': rd}
+        has_bal = False
+        for f in SIMFIN_BALANCE_FIELDS:
+            if f in fields:
+                bal_row[f] = fields[f]
+                has_bal = True
+            else:
+                bal_row[f] = np.nan
+        if has_bal:
+            bal_rows.append(bal_row)
+
+        # Cash flow fields
+        cf_row = {'Ticker': ticker, 'Report Date': rd}
+        has_cf = False
+        for f in SIMFIN_CASHFLOW_FIELDS:
+            if f in fields:
+                cf_row[f] = fields[f]
+                has_cf = True
+            else:
+                cf_row[f] = np.nan
+        if has_cf:
+            cf_rows.append(cf_row)
+
+    def _to_multiindex(rows):
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows)
+        df = df.set_index(['Ticker', 'Report Date']).sort_index()
+        # Drop duplicate index entries (keep first = most recent filing)
+        df = df[~df.index.duplicated(keep='first')]
+        return df
+
+    return _to_multiindex(inc_rows), _to_multiindex(bal_rows), _to_multiindex(cf_rows)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Filing metadata: filed date and filing delay
+# ═══════════════════════════════════════════════════════════════
+
+def extract_filing_metadata(all_quarterly_data):
+    """Extract filing dates and compute filing delay days.
+
+    Returns dict: {(ticker, end_date_str): {'filed': str, 'filing_delay_days': int}}
+    """
+    metadata = {}
+    for (ticker, end_date), fields in all_quarterly_data.items():
+        filed = fields.get('filed', '')
+        if not filed or not end_date:
+            continue
+        try:
+            delay = (pd.to_datetime(filed) - pd.to_datetime(end_date)).days
+        except Exception:
+            continue
+        metadata[(ticker, end_date)] = {
+            'filed': filed,
+            'filing_delay_days': delay,
+        }
+    return metadata
+
+
+# ═══════════════════════════════════════════════════════════════
+# Main EDGAR pipeline
+# ═══════════════════════════════════════════════════════════════
+
+def load_edgar_cache(cache_dir='data/'):
+    """Load cached EDGAR quarterly data."""
+    path = os.path.join(cache_dir, 'edgar_fundamentals.pkl')
+    if os.path.exists(path):
+        try:
+            with open(path, 'rb') as f:
+                return pickle.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def save_edgar_cache(all_data, cache_dir='data/'):
+    """Save EDGAR quarterly data to pickle cache."""
+    path = os.path.join(cache_dir, 'edgar_fundamentals.pkl')
+    os.makedirs(cache_dir, exist_ok=True)
+    with open(path, 'wb') as f:
+        pickle.dump(all_data, f)
+
+
+def fetch_edgar_fundamentals(tickers_to_fetch, cik_map, cache_dir='data/'):
+    """Fetch EDGAR data for a list of tickers. Returns parsed quarterly data.
+
+    Respects SEC rate limits (10 req/sec). Saves progress every 100 tickers.
+    """
+    # Load existing cache
+    all_data = load_edgar_cache(cache_dir)
+    already_fetched = {k[0] for k in all_data}
+
+    # Filter to tickers we have CIKs for and haven't fetched yet
+    to_fetch = [t for t in tickers_to_fetch
+                if t in cik_map and t not in already_fetched]
+
+    if not to_fetch:
+        print(f"  EDGAR: {len(already_fetched)} cached, 0 to fetch")
+        return all_data
+
+    print(f"  EDGAR: {len(already_fetched)} cached, {len(to_fetch)} to fetch")
+
+    fetched_count = 0
+    failed_count = 0
+
+    for i, ticker in enumerate(to_fetch):
+        cik = cik_map[ticker]
+        try:
+            facts_json = _fetch_company_facts(cik)
+            quarterly = parse_edgar_facts(facts_json, ticker)
+
+            if quarterly:
+                all_data.update(quarterly)
+                fetched_count += 1
+            else:
+                failed_count += 1
+
+            time.sleep(SEC_RATE_DELAY)
+
+            # Save progress every 100 tickers
+            if (i + 1) % 100 == 0:
+                save_edgar_cache(all_data, cache_dir)
+                print(f"    EDGAR progress: {i+1}/{len(to_fetch)} "
+                      f"(+{fetched_count} ok, {failed_count} empty)")
+
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                print(f"    Rate limited at {i}, sleeping 120s...")
+                time.sleep(120)
+                try:
+                    facts_json = _fetch_company_facts(cik)
+                    quarterly = parse_edgar_facts(facts_json, ticker)
+                    if quarterly:
+                        all_data.update(quarterly)
+                        fetched_count += 1
+                except Exception:
+                    failed_count += 1
+            elif e.code == 404:
+                failed_count += 1  # No EDGAR data for this CIK
+            else:
+                failed_count += 1
+            time.sleep(SEC_RATE_DELAY)
+        except Exception:
+            failed_count += 1
+            time.sleep(SEC_RATE_DELAY)
+
+    # Final save
+    save_edgar_cache(all_data, cache_dir)
+    unique_tickers = len({k[0] for k in all_data})
+    print(f"    EDGAR done: +{fetched_count} tickers ({failed_count} empty/failed)")
+    print(f"    EDGAR cache total: {unique_tickers} tickers, "
+          f"{len(all_data)} quarter-rows")
+
+    return all_data
+
+
+def merge_edgar_into_simfin(df_inc, df_bal, df_cf, edgar_data, sector_map):
+    """Merge EDGAR data into SimFin DataFrames.
+
+    - EDGAR-only tickers: add as new rows
+    - SimFin tickers with sparse data: fill NaN fields only (SimFin priority)
+
+    Returns updated (df_inc, df_bal, df_cf, edgar_filing_metadata).
+    """
+    if not edgar_data:
+        return df_inc, df_bal, df_cf, {}
+
+    # Build EDGAR frames
+    e_inc, e_bal, e_cf = _edgar_to_simfin_frames(edgar_data)
+    filing_meta = extract_filing_metadata(edgar_data)
+
+    simfin_tickers = set(df_inc.index.get_level_values('Ticker').unique())
+    edgar_tickers = set()
+    if len(e_inc) > 0:
+        edgar_tickers |= set(e_inc.index.get_level_values('Ticker').unique())
+    if len(e_bal) > 0:
+        edgar_tickers |= set(e_bal.index.get_level_values('Ticker').unique())
+
+    new_tickers = edgar_tickers - simfin_tickers
+    overlap_tickers = edgar_tickers & simfin_tickers
+
+    n_simfin = len(simfin_tickers)
+    n_new = len(new_tickers)
+    n_overlap = len(overlap_tickers)
+
+    # Add EDGAR-only tickers
+    def _append_new(df_simfin, df_edgar, fields):
+        if len(df_edgar) == 0:
+            return df_simfin
+        new_rows = df_edgar[
+            df_edgar.index.get_level_values('Ticker').isin(new_tickers)
+        ]
+        if len(new_rows) == 0:
+            return df_simfin
+        # Ensure columns match
+        for col in df_simfin.columns:
+            if col not in new_rows.columns:
+                new_rows[col] = np.nan
+        new_rows = new_rows[df_simfin.columns]
+        return pd.concat([df_simfin, new_rows]).sort_index()
+
+    df_inc = _append_new(df_inc, e_inc, SIMFIN_INCOME_FIELDS)
+    df_bal = _append_new(df_bal, e_bal, SIMFIN_BALANCE_FIELDS)
+    df_cf = _append_new(df_cf, e_cf, SIMFIN_CASHFLOW_FIELDS)
+
+    # Gap-fill: for overlapping tickers, fill NaN in SimFin with EDGAR values
+    filled_count = 0
+    for df_simfin, df_edgar in [(df_inc, e_inc), (df_bal, e_bal), (df_cf, e_cf)]:
+        if len(df_edgar) == 0:
+            continue
+        overlap_idx = df_simfin.index.intersection(df_edgar.index)
+        for idx in overlap_idx:
+            for col in df_simfin.columns:
+                if col not in df_edgar.columns:
+                    continue
+                try:
+                    sim_val = df_simfin.loc[idx, col]
+                    if pd.isna(sim_val):
+                        edgar_val = df_edgar.loc[idx, col]
+                        if pd.notna(edgar_val):
+                            df_simfin.loc[idx, col] = edgar_val
+                            filled_count += 1
+                except Exception:
+                    continue
+
+    # Add EDGAR tickers to sector_map (default to 'Other')
+    for tk in new_tickers:
+        if tk not in sector_map:
+            sector_map[tk] = 'Other'
+
+    total_tickers = len(set(df_inc.index.get_level_values('Ticker').unique()))
+    total_quarters = len(df_inc)
+
+    print(f"\n  {'='*50}")
+    print(f"  FUNDAMENTAL COVERAGE")
+    print(f"    SimFin:      {n_simfin} tickers")
+    print(f"    EDGAR:      +{n_new} new tickers")
+    print(f"    Gap-fill:   +{filled_count} fields in {n_overlap} overlap tickers")
+    print(f"    Total:       {total_tickers} tickers ({total_quarters} quarters)")
+    print(f"  {'='*50}\n")
+
+    return df_inc, df_bal, df_cf, filing_meta
+
+
+def get_edgar_sector_map(cik_map, tickers, cache_dir='data/'):
+    """Try to get SIC-based sector mapping from SEC for EDGAR-only tickers.
+
+    Falls back to 'Other' if unavailable. Uses company_tickers_exchange.json
+    which includes SIC codes.
+    """
+    path = os.path.join(cache_dir, 'sec_sic_map.json')
+    if os.path.exists(path):
+        age_days = (time.time() - os.path.getmtime(path)) / 86400
+        if age_days < 30:
+            with open(path) as f:
+                return json.load(f)
+
+    # Try the exchange file which has SIC codes
+    sic_map = {}
+    try:
+        url = 'https://www.sec.gov/files/company_tickers_exchange.json'
+        req = urllib.request.Request(url, headers=SEC_HEADERS)
+        resp = urllib.request.urlopen(req, timeout=30)
+        raw = json.loads(resp.read())
+        fields = raw.get('fields', [])
+        data = raw.get('data', [])
+
+        # Find column indices
+        ticker_idx = fields.index('ticker') if 'ticker' in fields else None
+        sic_idx = fields.index('sic') if 'sic' in fields else None
+
+        if ticker_idx is not None and sic_idx is not None:
+            for row in data:
+                tk = str(row[ticker_idx]).upper().replace('.', '-')
+                sic = row[sic_idx]
+                if sic:
+                    sic_map[tk] = _sic_to_sector(int(sic))
+
+        os.makedirs(cache_dir, exist_ok=True)
+        with open(path, 'w') as f:
+            json.dump(sic_map, f)
+    except Exception:
+        pass
+
+    return sic_map
+
+
+def _sic_to_sector(sic):
+    """Map SIC code to sector name matching our sector categories."""
+    if 3570 <= sic <= 3579 or 3660 <= sic <= 3699 or 7370 <= sic <= 7379:
+        return 'Technology'
+    elif 2830 <= sic <= 2836 or 3841 <= sic <= 3851 or 5912 <= sic <= 5912 or 8000 <= sic <= 8099:
+        return 'Healthcare'
+    elif 6000 <= sic <= 6999:
+        return 'Financial'
+    elif 1300 <= sic <= 1389 or 2900 <= sic <= 2999 or 4900 <= sic <= 4949:
+        return 'Energy'
+    elif 3400 <= sic <= 3569 or 3580 <= sic <= 3659 or 3700 <= sic <= 3799:
+        return 'Industrials'
+    elif 5000 <= sic <= 5199 or 5200 <= sic <= 5999 or 2000 <= sic <= 2111:
+        return 'Consumer'
+    elif 4800 <= sic <= 4899 or 4950 <= sic <= 4999:
+        return 'Utilities'
+    else:
+        return 'Other'
