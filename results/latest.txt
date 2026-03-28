@@ -11,11 +11,11 @@ DATA...
   Universe: 2759 raw -> 2731 (excl 28 financial)
   All 960 prices cached
   Training: 960 stocks | Tradeable: 630 for walk-forward (330 delisted with history)
-  [0m13s]
+  [0m14s]
 
 FEATURES: processing...
   Dev: 15,163 | Hold: 2,639 | Training 26 targets (13 ex, 10 va, 3 raw)
-  [0s] [0m13s]
+  [0s] [0m14s]
 
 
 ######################################################################
@@ -29,21 +29,21 @@ VULNERABILITY MODEL...
 
   RESULTS:
     EXCESS:
-      exdrop_15_5d                   AUC:0.801 [0.745,0.812] BR:2% ◄
-      exdrop_15_10d                  AUC:0.791 [0.769,0.813] BR:6%
-      exdrop_10_5d                   AUC:0.764 [0.740,0.785] BR:6%
+      exdrop_15_5d                   AUC:0.801 [0.745,0.811] BR:2% ◄
+      exdrop_15_10d                  AUC:0.791 [0.768,0.813] BR:6%
+      exdrop_10_5d                   AUC:0.764 [0.742,0.785] BR:6%
       exdrop_10_10d                  AUC:0.761 [0.740,0.775] BR:12%
-      exdrop_15_21d                  AUC:0.749 [0.727,0.765] BR:12%
+      exdrop_15_21d                  AUC:0.749 [0.726,0.764] BR:12%
     VOL-ADJ:
-      voladj_2sig_63d                AUC:0.762 [0.725,0.802] BR:3%
+      voladj_2sig_63d                AUC:0.762 [0.727,0.799] BR:3%
       voladj_2sig_42d                AUC:0.714 [0.673,0.753] BR:3%
-      voladj_1sig_63d                AUC:0.680 [0.664,0.695] BR:13%
-      voladj_2sig_10d                AUC:0.676 [0.630,0.715] BR:3%
-      voladj_1sig_42d                AUC:0.671 [0.649,0.689] BR:15%
+      voladj_1sig_63d                AUC:0.680 [0.658,0.696] BR:13%
+      voladj_2sig_10d                AUC:0.676 [0.637,0.712] BR:3%
+      voladj_1sig_42d                AUC:0.671 [0.650,0.688] BR:15%
     RAW:
-      drop_5_21d                     AUC:0.696 [0.681,0.710] BR:30%
-      drop_5_63d                     AUC:0.695 [0.681,0.708] BR:38%
-      drop_5_42d                     AUC:0.688 [0.674,0.703] BR:35%
+      drop_5_21d                     AUC:0.696 [0.681,0.712] BR:30%
+      drop_5_63d                     AUC:0.695 [0.680,0.709] BR:38%
+      drop_5_42d                     AUC:0.688 [0.672,0.701] BR:35%
   BEST: exdrop_15_5d | 0.801 | K=10
   Features: ['roa', 'eps', 'vol_60d', 'log_revenue', 'vol_30d', 'earnings_yield', 'cfo_to_revenue', 'gross_margin', 'cash_to_assets', 'sales_to_price']
 
@@ -59,7 +59,7 @@ VULNERABILITY MODEL...
     Trunc-dev holdout: 0.768
     (If similar → no leakage. If trunc is lower → sampling variation in full holdout)
 
-  Flagged: 309 | [2m13s]
+  Flagged: 309 | [2m14s]
 
 ======================================================================
 WALK-FORWARD: exdrop_15_10d / 21d hold / confirmed entry
@@ -88,7 +88,7 @@ WALK-FORWARD: exdrop_15_10d / 21d hold / confirmed entry
 
   Profitable quarters: 5/10
   Trades: 297 total, 75 top-25%
-  [5s] [2m18s]
+  [5s] [2m19s]
 
 ======================================================================
 EQUITY CURVES + DYNAMIC REGIME
@@ -129,7 +129,7 @@ EQUITY CURVES + DYNAMIC REGIME
       2023Q4: $   7,514 (Q P&L $+183, size $1,952)
       2024Q1: $   7,552 (Q P&L $+38, size $2,440)
       2024Q2: $   7,399 (Q P&L $-153, size $3,050)
-  [5s] [2m23s]
+  [5s] [2m24s]
 
 ======================================================================
 DIAGNOSTICS
@@ -148,7 +148,7 @@ DIAGNOSTICS
     Downloading earnings dates for 60 tickers...
     Got dates for 0 tickers
     No earnings dates available
-  [6s] [2m29s]
+  [3s] [2m27s]
 
 
   HOLDOUT (Full SimFin):
@@ -162,9 +162,85 @@ DIAGNOSTICS
 ######################################################################
 # UNIVERSE B: S&P 400+600 Index
 ######################################################################
-    S&P index: 130 tickers from fallback
-  S&P index overlap with our data: 36/130
-  Too few overlapping tickers (36), skipping
+    S&P 400 scrape failed: HTTP Error 403: Forbidden
+    S&P 600 scrape failed: HTTP Error 403: Forbidden
+    WARNING: Wikipedia scrape got only 0 tickers, trying fallback file
+    Fallback file: +130 tickers, total now 130
+    S&P index total: 130 unique tickers
+  S&P index: 130 tickers
+  Overlap with feature data: 36/130
+  Overlap with price cache: 36/130
+  WARNING: low overlap (36 tickers), running anyway
+======================================================================
+PIPELINE: S&P 400+600
+  36 tickers | 581 dev + 104 holdout rows
+======================================================================
+VULNERABILITY MODEL...
+
+  RESULTS:
+    EXCESS:
+      exdrop_15_63d                  AUC:0.643 [0.552,0.718] BR:27% ◄
+      exdrop_15_42d                  AUC:0.641 [0.552,0.737] BR:22%
+      exdrop_10_42d                  AUC:0.625 [0.519,0.749] BR:31%
+      exdrop_10_21d                  AUC:0.570 [0.476,0.665] BR:21%
+      exdrop_10_63d                  AUC:0.524 [0.455,0.615] BR:35%
+    VOL-ADJ:
+      voladj_1sig_5d                 AUC:0.639 [0.569,0.691] BR:12%
+      voladj_1sig_10d                AUC:0.621 [0.557,0.685] BR:14%
+      voladj_1sig_21d                AUC:0.592 [0.506,0.702] BR:14%
+      voladj_1sig_42d                AUC:0.588 [0.465,0.721] BR:15%
+      voladj_1sig_63d                AUC:0.495 [0.403,0.590] BR:13%
+    RAW:
+      drop_5_42d                     AUC:0.642 [0.558,0.725] BR:35%
+      drop_5_21d                     AUC:0.604 [0.528,0.669] BR:30%
+      drop_5_63d                     AUC:0.592 [0.496,0.684] BR:38%
+  BEST: exdrop_15_63d | 0.643 | K=10
+  Features: ['shares', 'share_chg_yoy', 'max_dd_63d', 'mom_x_vol', 'beta', 'mom_252d', 'bvps', 'liab_to_assets', 'mom_21d', 'earnings_yield']
+
+  LOCKED CONFIG: exdrop_15_10d / 21d hold / confirmed entry
+  (All targets trained for diagnostics. Only TRADING_TARGET used for walk-forward.)
+
+  FUND-ONLY on exdrop_15_63d: 0.554 vs full 0.643
+  PURE-FUND on voladj_1sig_5d: 0.617 vs full 0.639
+    ⚠️  Marginal fundamental signal
+
+  TRUNCATED HOLDOUT TEST:
+    Full-dev holdout:  0.523
+    Trunc-dev holdout: 0.551
+    (If similar → no leakage. If trunc is lower → sampling variation in full holdout)
+
+  Flagged: 15 | [2m54s]
+
+======================================================================
+WALK-FORWARD: exdrop_15_10d / 21d hold / confirmed entry
+======================================================================
+
+  ERROR: exdrop_15_10d not in trained targets!
+======================================================================
+EQUITY CURVES + DYNAMIC REGIME
+======================================================================
+
+  ACCOUNT SCENARIOS (top-25% trades, +4% regime check):
+
+  RAMP-UP ($5K start, scale 25% after profitable Q):
+  [0s] [2m54s]
+
+======================================================================
+DIAGNOSTICS
+======================================================================
+
+  STAGED ENTRY (enter after 2% drop in 5d):
+
+  EARNINGS PROXIMITY:
+    No earnings dates available
+  [0s] [2m54s]
+
+
+  HOLDOUT (S&P 400+600):
+    exdrop_15_63d: events pos=25 neg=79 nan=0
+    exdrop_15_63d: Dev=0.643 Hold=0.523 [0.395,0.663]
+    voladj_1sig_5d: events pos=39 neg=65 nan=0
+    voladj_1sig_5d: Dev=0.639 Hold=0.410 [0.307,0.537]
 
 ======================================================================
 VOLADJ COLLAPSE DIAGNOSTIC
@@ -192,15 +268,18 @@ VOLADJ COLLAPSE DIAGNOSTIC
 HEAD-TO-HEAD COMPARISON
 ======================================================================
 
-  Single universe: Full SimFin
-  Top 25%: win=71% avg=$+1.98/sh
+  Universe              Tickers   DevAUC  WF Trades  Top25%Win  Top25%P&L  Stops
+  ---------------------------------------------------------------------------
+  Full SimFin               960    0.791        297        71%     $+1.98    47%
+  S&P 400+600                36      N/A          0        N/A        N/A    N/A
+  ---------------------------------------------------------------------------
 
 ██████████████████████████████████████████████████████████████████████
   DROP SCORE v18 — FULL RESULTS
 ██████████████████████████████████████████████████████████████████████
 
 DATA: 960 stocks | 15,163 dev + 2,639 hold
-VULN: exdrop_15_5d Dev=0.801 [0.745,0.812]
+VULN: exdrop_15_5d Dev=0.801 [0.745,0.811]
 TRADING: exdrop_15_10d Hold=0.777 (holdout on trading target)
 Features: ['roa', 'eps', 'vol_60d', 'log_revenue', 'vol_30d', 'earnings_yield', 'cfo_to_revenue', 'gross_margin', 'cash_to_assets', 'sales_to_price']
 VOL-ADJUSTED: voladj_2sig_63d AUC=0.762
@@ -243,7 +322,7 @@ FIRST 20 TRADES (top-25% conviction):
   BW     2021-10-06 $     6→$     7 STOP $-0.97/sh (-15.6%) borrow=$0.03
   OIS    2021-10-06 $     6→$     7 EXP  $-0.32/sh (-5.1%) borrow=$0.03
 
-Total: 2.8 min
+Total: 3.2 min
 Drop Score v18 complete.
 
-Log saved to results/run_2026-03-28_014238.txt
+Log saved to results/run_2026-03-28_161521.txt
