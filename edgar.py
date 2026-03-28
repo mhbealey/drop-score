@@ -32,21 +32,32 @@ XBRL_TO_FIELD = {
         'SalesRevenueNet',
         'SalesRevenueGoodsNet',
         'SalesRevenueServicesNet',
+        'RegulatedAndUnregulatedOperatingRevenue',
+    ],
+    'Cost of Revenue': [
+        'CostOfRevenue',
+        'CostOfGoodsAndServicesSold',
+        'CostOfGoodsSold',
+        'CostOfServices',
     ],
     'Gross Profit': [
         'GrossProfit',
     ],
     'Operating Income (Loss)': [
         'OperatingIncomeLoss',
+        'IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest',
+        'IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments',
     ],
     'Net Income': [
         'NetIncomeLoss',
         'ProfitLoss',
         'NetIncomeLossAvailableToCommonStockholdersBasic',
+        'NetIncomeLossAvailableToCommonStockholdersDiluted',
     ],
     'Interest Expense, Net': [
         'InterestExpense',
         'InterestExpenseDebt',
+        'InterestIncomeExpenseNet',
     ],
     'Total Assets': [
         'Assets',
@@ -57,9 +68,11 @@ XBRL_TO_FIELD = {
     ],
     'Total Liabilities': [
         'Liabilities',
+        'LiabilitiesAndStockholdersEquity',
     ],
     'Total Debt': [
         'LongTermDebt',
+        'LongTermDebtNoncurrent',
         'LongTermDebtAndCapitalLeaseObligations',
         'DebtAndCapitalLeaseObligations',
     ],
@@ -72,6 +85,7 @@ XBRL_TO_FIELD = {
     'Cash, Cash Equivalents & Short Term Investments': [
         'CashAndCashEquivalentsAtCarryingValue',
         'CashCashEquivalentsAndShortTermInvestments',
+        'Cash',
     ],
     'Net Cash from Operating Activities': [
         'NetCashProvidedByUsedInOperatingActivities',
@@ -80,12 +94,15 @@ XBRL_TO_FIELD = {
     'Change in Fixed Assets & Intangibles': [
         'PaymentsToAcquirePropertyPlantAndEquipment',
         'PaymentsToAcquireProductiveAssets',
+        'CapitalExpenditureDiscontinuedOperations',
     ],
     'Shares (Diluted)': [
         'WeightedAverageNumberOfDilutedSharesOutstanding',
+        'EntityCommonStockSharesOutstanding',
     ],
     'Shares (Basic)': [
         'WeightedAverageNumberOfShareOutstandingBasicAndDiluted',
+        'WeightedAverageNumberOfSharesOutstandingBasic',
         'CommonStockSharesOutstanding',
     ],
 }
@@ -192,6 +209,8 @@ def parse_edgar_facts(facts_json, ticker):
                 continue
 
             units = us_gaap[tag_name].get('units', {})
+            tag_added = False
+
             for unit_type in ['USD', 'shares']:
                 if unit_type not in units:
                     continue
@@ -216,6 +235,7 @@ def parse_edgar_facts(facts_json, ticker):
                             quarterly_data[key] = {'filed': filed}
                         if simfin_field not in quarterly_data[key]:
                             quarterly_data[key][simfin_field] = val
+                            tag_added = True
                     else:
                         if not start:
                             continue
@@ -223,13 +243,30 @@ def parse_edgar_facts(facts_json, ticker):
                             days = (pd.to_datetime(end) - pd.to_datetime(start)).days
                         except Exception:
                             continue
-                        if 60 <= days <= 115:
+                        if 50 <= days <= 120:
                             if key not in quarterly_data:
                                 quarterly_data[key] = {'filed': filed}
                             if simfin_field not in quarterly_data[key]:
                                 quarterly_data[key][simfin_field] = val
+                                tag_added = True
 
-            break  # First matching tag wins, don't double-count
+            if tag_added:
+                break  # Only break if we actually got data from this tag
+
+    # Derive Gross Profit from Revenue - Cost of Revenue when not directly tagged
+    for key, fields in quarterly_data.items():
+        if 'Gross Profit' not in fields or pd.isna(fields.get('Gross Profit')):
+            rev = fields.get('Revenue')
+            cogs = fields.get('Cost of Revenue')
+            if rev is not None and cogs is not None:
+                fields['Gross Profit'] = rev - cogs
+        # Fix Total Liabilities if LiabilitiesAndStockholdersEquity was used
+        tl = fields.get('Total Liabilities')
+        ta = fields.get('Total Assets')
+        te = fields.get('Total Equity')
+        if tl is not None and ta is not None and te is not None:
+            if abs(tl - ta) < 1.0 and te > 0:
+                fields['Total Liabilities'] = tl - te
 
     return quarterly_data
 
@@ -313,9 +350,13 @@ def extract_filing_metadata(all_quarterly_data):
 # Main EDGAR pipeline
 # ═══════════════════════════════════════════════════════════════
 
-def load_edgar_cache(cache_dir='data/'):
-    """Load cached EDGAR quarterly data."""
-    path = os.path.join(cache_dir, 'edgar_fundamentals.pkl')
+# Bump this when XBRL_TO_FIELD or parse logic changes to force re-parse
+_MAPPING_VERSION = 3
+
+
+def _load_raw_json_cache(cache_dir='data/'):
+    """Load cached raw EDGAR JSON responses."""
+    path = os.path.join(cache_dir, 'edgar_raw_json.pkl')
     if os.path.exists(path):
         try:
             with open(path, 'rb') as f:
@@ -325,21 +366,77 @@ def load_edgar_cache(cache_dir='data/'):
     return {}
 
 
+def _save_raw_json_cache(raw_cache, cache_dir='data/'):
+    """Save raw EDGAR JSON cache."""
+    path = os.path.join(cache_dir, 'edgar_raw_json.pkl')
+    os.makedirs(cache_dir, exist_ok=True)
+    with open(path, 'wb') as f:
+        pickle.dump(raw_cache, f)
+
+
+def load_edgar_cache(cache_dir='data/'):
+    """Load cached EDGAR parsed data. Re-parses if mapping version changed."""
+    parsed_path = os.path.join(cache_dir, 'edgar_fundamentals.pkl')
+    version_path = os.path.join(cache_dir, 'edgar_mapping_version.txt')
+
+    cached_version = 0
+    if os.path.exists(version_path):
+        try:
+            with open(version_path) as f:
+                cached_version = int(f.read().strip())
+        except Exception:
+            pass
+
+    if cached_version < _MAPPING_VERSION:
+        raw_cache = _load_raw_json_cache(cache_dir)
+        if raw_cache:
+            print(f"  EDGAR: re-parsing {len(raw_cache)} cached tickers "
+                  f"(mapping v{cached_version} -> v{_MAPPING_VERSION})")
+            all_data = {}
+            for ticker, facts_json in raw_cache.items():
+                quarterly = parse_edgar_facts(facts_json, ticker)
+                if quarterly:
+                    all_data.update(quarterly)
+            save_edgar_cache(all_data, cache_dir)
+            unique = len({k[0] for k in all_data})
+            print(f"  EDGAR: re-parsed {unique} tickers, {len(all_data)} quarters")
+            return all_data
+        else:
+            # No raw JSON cache — old parsed data was built with buggy mapping.
+            # Discard it so tickers get re-fetched from EDGAR.
+            print(f"  EDGAR: discarding stale cache (mapping v{cached_version}, "
+                  f"need v{_MAPPING_VERSION}, no raw JSON to re-parse)")
+            return {}
+
+    if os.path.exists(parsed_path):
+        try:
+            with open(parsed_path, 'rb') as f:
+                return pickle.load(f)
+        except Exception:
+            pass
+    return {}
+
+
 def save_edgar_cache(all_data, cache_dir='data/'):
-    """Save EDGAR quarterly data to pickle cache."""
+    """Save EDGAR parsed data and mapping version."""
     path = os.path.join(cache_dir, 'edgar_fundamentals.pkl')
     os.makedirs(cache_dir, exist_ok=True)
     with open(path, 'wb') as f:
         pickle.dump(all_data, f)
+    version_path = os.path.join(cache_dir, 'edgar_mapping_version.txt')
+    with open(version_path, 'w') as f:
+        f.write(str(_MAPPING_VERSION))
 
 
 def fetch_edgar_fundamentals(tickers_to_fetch, cik_map, cache_dir='data/'):
     """Fetch EDGAR data for a list of tickers.
 
-    Respects SEC rate limits (10 req/sec). Saves progress every 100 tickers.
+    Caches raw JSON separately so mapping changes can re-parse without
+    re-downloading. Respects SEC rate limits (10 req/sec).
     """
     all_data = load_edgar_cache(cache_dir)
-    already_fetched = {k[0] for k in all_data}
+    raw_cache = _load_raw_json_cache(cache_dir)
+    already_fetched = set(raw_cache.keys()) | {k[0] for k in all_data}
 
     to_fetch = [t for t in tickers_to_fetch
                 if t in cik_map and t not in already_fetched]
@@ -357,6 +454,7 @@ def fetch_edgar_fundamentals(tickers_to_fetch, cik_map, cache_dir='data/'):
         cik = cik_map[ticker]
         try:
             facts_json = _fetch_company_facts(cik)
+            raw_cache[ticker] = facts_json
             quarterly = parse_edgar_facts(facts_json, ticker)
 
             if quarterly:
@@ -369,6 +467,7 @@ def fetch_edgar_fundamentals(tickers_to_fetch, cik_map, cache_dir='data/'):
 
             if (i + 1) % 100 == 0:
                 save_edgar_cache(all_data, cache_dir)
+                _save_raw_json_cache(raw_cache, cache_dir)
                 print(f"    EDGAR progress: {i+1}/{len(to_fetch)} "
                       f"(+{fetched_count} ok, {failed_count} empty)")
 
@@ -378,6 +477,7 @@ def fetch_edgar_fundamentals(tickers_to_fetch, cik_map, cache_dir='data/'):
                 time.sleep(120)
                 try:
                     facts_json = _fetch_company_facts(cik)
+                    raw_cache[ticker] = facts_json
                     quarterly = parse_edgar_facts(facts_json, ticker)
                     if quarterly:
                         all_data.update(quarterly)
@@ -392,6 +492,7 @@ def fetch_edgar_fundamentals(tickers_to_fetch, cik_map, cache_dir='data/'):
             time.sleep(SEC_RATE_DELAY)
 
     save_edgar_cache(all_data, cache_dir)
+    _save_raw_json_cache(raw_cache, cache_dir)
     unique_tickers = len({k[0] for k in all_data})
     print(f"    EDGAR done: +{fetched_count} tickers ({failed_count} empty/failed)")
     print(f"    EDGAR cache total: {unique_tickers} tickers, "
