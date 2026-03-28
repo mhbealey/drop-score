@@ -3,7 +3,7 @@ Data loading: SimFin fundamentals, multi-source price waterfall,
 sector mapping, pickle caching, universe construction,
 training/tradeable split, S&P index tickers.
 """
-import os, time, pickle, random, json, io
+import os, time, pickle, random, json
 import urllib.request
 import simfin as sf
 import yfinance as yf

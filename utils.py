@@ -20,7 +20,7 @@ def get_col(df, idx, *names):
                     v = v.iloc[0]
                 if pd.notna(v):
                     return float(v)
-            except:
+            except Exception:
                 pass
     return np.nan
 
@@ -29,7 +29,7 @@ def strip_tz(idx):
     if isinstance(idx, pd.DatetimeIndex) and idx.tz is not None:
         try:
             return idx.tz_convert(None)
-        except:
+        except Exception:
             return pd.DatetimeIndex([t.replace(tzinfo=None) for t in idx])
     return idx
 

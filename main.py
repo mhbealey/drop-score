@@ -12,7 +12,7 @@ def install(pkg):
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", pkg])
 
 for pkg in ["simfin", "yfinance", "xgboost", "lightgbm", "scikit-learn",
-            "matplotlib", "tqdm", "lxml", "html5lib"]:
+            "matplotlib", "tqdm"]:
     try:
         __import__(pkg.replace("-", "_"))
     except ImportError:
@@ -170,7 +170,7 @@ def holdout_eval(bundle, label):
                             and yh.values[valid][idx].sum() < len(idx)):
                         try:
                             hb.append(roc_auc_score(yh.values[valid][idx], hp[valid][idx]))
-                        except:
+                        except Exception:
                             pass
                 hcl = np.percentile(hb, 2.5) if hb else ho_auc
                 hch = np.percentile(hb, 97.5) if hb else ho_auc
@@ -204,8 +204,8 @@ if UNIVERSE_MODE in ("full", "both"):
 if UNIVERSE_MODE in ("sp_index", "both"):
     # Time budget: skip Universe B if >25 min already
     elapsed_min = (time.time() - t_start) / 60
-    if UNIVERSE_MODE == "both" and elapsed_min > 25:
-        print(f"\n  TIME BUDGET: {elapsed_min:.0f} min elapsed, skipping S&P index pipeline")
+    if UNIVERSE_MODE == "both" and elapsed_min > 40:
+        print(f"\n  TIME BUDGET: {elapsed_min:.0f} min elapsed (>40), skipping S&P index pipeline")
     else:
         print("\n" + "#" * 70)
         print("# UNIVERSE B: S&P 400+600 Index")
@@ -497,7 +497,7 @@ if primary_label:
             valid = ~np.isnan(hp)
             if valid.sum() >= 20 and yh[valid].sum() >= 5:
                 ho_auc = roc_auc_score(yh[valid], hp[valid])
-    except:
+    except Exception:
         pass
 
     # Also get voladj AUC
