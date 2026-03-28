@@ -257,6 +257,15 @@ def download_all_prices(universe, cache, cache_path):
     unavail = cache.get('unavailable_tickers', set())
     counts = {'cache': 0, 'simfin': 0, 'yf_batch': 0, 'fmp': 0, 'yf_individual': 0}
 
+    # Clear stale unavail set (retry after 7 days)
+    unavail_ts = cache.get('unavail_ts', 0)
+    if time.time() - unavail_ts > 7 * 86400 and unavail:
+        print(f"  Clearing {len(unavail)} stale unavailable tickers (>7d old)")
+        unavail = set()
+        cache['unavailable_tickers'] = unavail
+        cache['unavail_ts'] = time.time()
+        save_cache(cache, cache_path)
+
     # Ensure benchmark / ETF prices
     for sym in list(SECTOR_ETFS.keys()) + ['SPY', '^VIX']:
         if sym not in price_dict:
@@ -273,7 +282,9 @@ def download_all_prices(universe, cache, cache_path):
     counts['cache'] = cached_count
 
     if not all_need:
-        print(f"  All {cached_count} prices cached")
+        skipped = len([tk for tk in universe if tk in unavail])
+        print(f"  Cache: {cached_count} prices | {skipped} unavailable | "
+              f"{len(all_need)} to download")
         return price_dict, unavail
 
     print(f"  Need prices for {len(all_need)} tickers ({cached_count} cached, "
@@ -398,6 +409,7 @@ def download_all_prices(universe, cache, cache_path):
     if still_missing:
         unavail.update(still_missing)
         cache['unavailable_tickers'] = unavail
+        cache['unavail_ts'] = time.time()
         save_cache(cache, cache_path)
 
     # ── Summary ──
@@ -422,42 +434,13 @@ def download_all_prices(universe, cache, cache_path):
 # ═══════════════════════════════════════════════════════════════
 
 def get_sp_index_tickers():
-    """S&P 400+600 tickers from Wikipedia, with fallback file."""
+    """S&P 400+600 tickers from static CSV files."""
     tickers = set()
-    urls = [
-        ('S&P 400', 'https://en.wikipedia.org/wiki/List_of_S%26P_400_companies'),
-        ('S&P 600', 'https://en.wikipedia.org/wiki/List_of_S%26P_600_companies'),
-    ]
-    for label, url in urls:
-        try:
-            tables = pd.read_html(url)
-            df = tables[0]
-            for col in df.columns:
-                if 'symbol' in str(col).lower() or 'ticker' in str(col).lower():
-                    syms = df[col].astype(str).str.strip().str.replace('.', '-', regex=False)
-                    tickers.update(syms)
-                    print(f"    {label}: {len(syms)} tickers from column '{col}'")
-                    break
-        except Exception as e:
-            print(f"    {label} scrape failed: {str(e)[:120]}")
-
-    if len(tickers) >= 100:
-        print(f"    S&P index total: {len(tickers)} unique tickers")
-        return tickers
-
-    # Fallback to local file if scrape failed or returned too few
-    print(f"    WARNING: Wikipedia scrape got only {len(tickers)} tickers, trying fallback file")
-    fallback = os.path.join(os.path.dirname(__file__), 'data', 'sp_index_fallback.txt')
-    if os.path.exists(fallback):
-        with open(fallback) as f:
-            fb_tickers = {t.strip().replace('.', '-') for line in f
-                          for t in line.split(',') if t.strip()}
-            tickers.update(fb_tickers)
-            print(f"    Fallback file: +{len(fb_tickers)} tickers, total now {len(tickers)}")
-    else:
-        print("    WARNING: No fallback file found either")
-
-    print(f"    S&P index total: {len(tickers)} unique tickers")
+    for f in ['data/sp400_tickers.csv', 'data/sp600_tickers.csv']:
+        if os.path.exists(f):
+            with open(f) as fh:
+                tickers.update(line.strip().replace('.', '-') for line in fh if line.strip())
+    print(f"  S&P index: {len(tickers)} tickers from static files")
     return tickers
 
 

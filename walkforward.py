@@ -270,24 +270,23 @@ def run_walkforward(data_bundle):
     price_dict = data_bundle['price_dict']
     tradeable_tickers = data_bundle.get('tradeable_tickers')
 
-    if TRADING_TARGET not in v_results:
-        print(f"\n  ERROR: {TRADING_TARGET} not in trained targets!")
-        data_bundle.update(
-            all_wf_trades=[], wf_df=pd.DataFrame(),
-            wf_top=pd.DataFrame(), wf_comparison=[],
-        )
-        return data_bundle
+    wf_tgt = TRADING_TARGET
+    if wf_tgt not in v_results:
+        # Fallback: use whatever target Pareto selected for this universe
+        best_fallback = max(v_results, key=lambda k: v_results[k]['mauc'])
+        print(f"\n  {wf_tgt} not in trained targets, using best: {best_fallback}")
+        wf_tgt = best_fallback
 
-    auc = v_results[TRADING_TARGET]['mauc']
+    auc = v_results[wf_tgt]['mauc']
     use_conf = (ENTRY_MODE == "confirmed")
-    print(f"\n  Target: {TRADING_TARGET} (AUC={auc:.3f})")
+    print(f"\n  Target: {wf_tgt} (AUC={auc:.3f})")
     print(f"  Hold: {TRADING_HOLD}d | Entry: {ENTRY_MODE}"
           f"{f' ({CONFIRMATION_DROP:.0%} in {CONFIRMATION_WINDOW}d)' if use_conf else ''}")
     print(f"  Borrow: {BORROW_RATE_EASY:.0%} (easy, vol>=1M) / "
           f"{BORROW_RATE_HARD:.0%} (hard, vol<1M)")
 
     # Train models once
-    scored_quarters = _process_quarters(data_bundle, TRADING_TARGET)
+    scored_quarters = _process_quarters(data_bundle, wf_tgt)
 
     # Generate trades
     trades = _generate_trades(
@@ -350,7 +349,7 @@ def run_walkforward(data_bundle):
     t25 = tiers.get('Top 25%', {})
     full = tiers.get('Full', {})
     comparison = [{
-        'target': TRADING_TARGET, 'hold': TRADING_HOLD,
+        'target': wf_tgt, 'hold': TRADING_HOLD,
         'entry': ENTRY_MODE,
         'n': len(wf_df),
         'top25_win': t25.get('win', np.nan),

@@ -12,7 +12,7 @@ def install(pkg):
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", pkg])
 
 for pkg in ["simfin", "yfinance", "xgboost", "lightgbm", "scikit-learn",
-            "matplotlib", "tqdm", "lxml"]:
+            "matplotlib", "tqdm"]:
     try:
         __import__(pkg.replace("-", "_"))
     except ImportError:
