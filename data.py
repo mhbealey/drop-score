@@ -73,7 +73,7 @@ def save_cache(cache, cache_path):
 
 def load_intermediates(cache_dir, force_recompute=False):
     """Load cached feature-engineering intermediates if available."""
-    intermediates_path = os.path.join(cache_dir, 'v13_intermediates.pkl')
+    intermediates_path = os.path.join(cache_dir, 'v14_intermediates.pkl')
     intm_loaded = False
     df_q = df_dev = df_hold = df_daily = None
     if not force_recompute and os.path.exists(intermediates_path):
