@@ -8,3 +8,5 @@ tqdm
 pandas
 numpy
 gdown
+optuna
+scipy

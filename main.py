@@ -12,7 +12,7 @@ def install(pkg):
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", pkg])
 
 for pkg in ["simfin", "yfinance", "xgboost", "lightgbm", "scikit-learn",
-            "matplotlib", "tqdm"]:
+            "matplotlib", "tqdm", "optuna", "scipy"]:
     try:
         __import__(pkg.replace("-", "_"))
     except ImportError:
@@ -54,9 +54,10 @@ from config import (
 from utils import elapsed, clean_X, to_scalar, ensure_series
 from data import load_all_data, get_sp_index_tickers
 from features import prepare_features
-from model import run_vulnerability_model, run_model
+from model import run_vulnerability_model, run_model, run_bayesian_optimization, run_bootstrap_ci
 from walkforward import run_walkforward
 from equity import run_equity_scenarios
+from edgar import run_feature_qa
 
 # ═══════════════════════════════════════════════════════════════
 # BANNER
@@ -76,6 +77,14 @@ data = load_all_data()
 # 2. FEATURES (computed once on full dataset)
 # ═══════════════════════════════════════════════════════════════
 data = prepare_features(data)
+
+# ── Feature QA (Phase 4) ──
+edgar_tickers = data.get('edgar_tickers', set())
+if edgar_tickers:
+    run_feature_qa(
+        data['df_dev'], data['df_hold'],
+        edgar_tickers, data['fcols_q'],
+    )
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -237,6 +246,29 @@ if UNIVERSE_MODE == "full" and 'Full SimFin' not in pipeline_results:
 if UNIVERSE_MODE == "sp_index" and 'S&P 400+600' not in pipeline_results:
     # Already handled above
     pass
+
+
+# ═══════════════════════════════════════════════════════════════
+# BAYESIAN OPTIMIZATION + BOOTSTRAP CIs (Phase 6)
+# ═══════════════════════════════════════════════════════════════
+elapsed_min = (time.time() - t_start) / 60
+print(f"\n  Time check: {elapsed_min:.0f} min elapsed")
+
+_primary = 'Full SimFin' if 'Full SimFin' in pipeline_results else (
+    list(pipeline_results.keys())[0] if pipeline_results else None
+)
+
+if _primary and elapsed_min < 80:
+    _res = pipeline_results[_primary]
+    # Bayesian optimization
+    _res = run_bayesian_optimization(_res, n_trials=30, timeout=1200)
+    pipeline_results[_primary] = _res
+    # Bootstrap CIs on walk-forward top 25%
+    _wf_top = _res.get('wf_top', pd.DataFrame())
+    _boot = run_bootstrap_ci(_wf_top, n_boot=1000)
+    pipeline_results[_primary]['bootstrap_ci'] = _boot
+elif elapsed_min >= 80:
+    print("  TIME BUDGET: >80 min, skipping Bayesian optimization")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -573,8 +605,62 @@ VERDICT:
             'universes': list(pipeline_results.keys()),
         }, f)
 
+# ═══════════════════════════════════════════════════════════════
+# QA CHECKLIST (Phase 7)
+# ═══════════════════════════════════════════════════════════════
+print("\n" + "=" * 70)
+print("QA CHECKLIST")
+print("=" * 70)
+
+_sp_tk = data.get('sp_tickers', set())
+_edgar_tk = data.get('edgar_tickers', set())
+
+_checks = {}
+# EDGAR tickers in feature pipeline
+if primary_label:
+    _b_tickers = pipeline_results.get('S&P 400+600', {}).get('df_dev', pd.DataFrame())
+    if hasattr(_b_tickers, 'ticker'):
+        _b_count = _b_tickers['ticker'].nunique()
+    else:
+        _b_count = 0
+    _checks["EDGAR tickers in feature pipeline"] = _b_count > 300
+    _checks["S&P coverage > 400"] = len(_sp_tk & set(data.get('universe', []))) > 400
+
+    # Inf check
+    _total_inf = 0
+    for _fc in data.get('fcols_q', []):
+        if _fc in data['df_dev'].columns:
+            _total_inf += np.isinf(data['df_dev'][_fc]).sum()
+    _checks["No inf in features"] = _total_inf == 0
+
+    # Duplicate check
+    if 'ticker' in data['df_dev'].columns and 'report_date' in data['df_dev'].columns:
+        _n_dupes = data['df_dev'].duplicated(subset=['ticker', 'report_date']).sum()
+        _checks["No duplicate rows"] = _n_dupes == 0
+
+    # WF includes EDGAR-sourced trades
+    _wf_df = pipeline_results.get(_primary, {}).get('wf_df', pd.DataFrame())
+    if len(_wf_df) > 0 and 'ticker' in _wf_df.columns:
+        _n_edgar_trades = len(_wf_df[_wf_df['ticker'].isin(_edgar_tk)])
+        _checks["WF includes EDGAR-sourced trades"] = _n_edgar_trades > 0
+    else:
+        _checks["WF includes EDGAR-sourced trades"] = False
+
+    # Bayesian opt
+    _checks["Bayesian opt completed"] = 'optuna_study' in pipeline_results.get(_primary, {})
+
+    # Bootstrap CIs
+    _boot_ci = pipeline_results.get(_primary, {}).get('bootstrap_ci', {})
+    _checks["Bootstrap CIs computed"] = len(_boot_ci) > 0
+
+for _check, _passed in _checks.items():
+    _icon = 'PASS' if _passed else 'FAIL'
+    print(f"  [{_icon}] {_check}")
+
+print("=" * 70)
+
 print(f"\nTotal: {(time.time()-t_start)/60:.1f} min")
-print("Drop Score v18 complete.")
+print("Drop Score v18.1 complete.")
 
 # Close log
 print(f"\nLog saved to {_log_path}")
