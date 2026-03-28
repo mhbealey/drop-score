@@ -285,7 +285,7 @@ def _add_sector_relative(row, tk, price_dict, sector_etf_ret):
 
 
 def build_features_from_scratch(data_bundle):
-    """Build quarterly features from SimFin + price data when no cached intermediates exist."""
+    """Build quarterly features from SimFin + EDGAR + price data."""
     print("FEATURES: building from scratch...")
 
     df_inc = data_bundle['df_inc']
@@ -297,6 +297,7 @@ def build_features_from_scratch(data_bundle):
     sector_etf_ret = data_bundle['sector_etf_ret']
     universe = data_bundle['universe']
     intermediates_path = data_bundle['intermediates_path']
+    edgar_filing_meta = data_bundle.get('edgar_filing_meta', {})
 
     # Build quarterly feature rows
     rows = []
@@ -318,6 +319,18 @@ def build_features_from_scratch(data_bundle):
 
     df_q = pd.DataFrame(rows)
     print(f"  Raw quarterly rows: {len(df_q):,}")
+
+    # === Filing delay feature (from EDGAR metadata) ===
+    if edgar_filing_meta:
+        delays = []
+        for _, row in df_q.iterrows():
+            tk = row['ticker']
+            rd = str(row['report_date'].date()) if pd.notna(row.get('report_date')) else ''
+            meta = edgar_filing_meta.get((tk, rd))
+            delays.append(meta['filing_delay_days'] if meta else np.nan)
+        df_q['filing_delay_days'] = delays
+        n_with_delay = df_q['filing_delay_days'].notna().sum()
+        print(f"  Filing delay: {n_with_delay:,} rows with data")
 
     if len(df_q) == 0:
         print("  ERROR: No features built")

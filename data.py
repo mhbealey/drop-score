@@ -1,5 +1,5 @@
 """
-Data loading: SimFin fundamentals, multi-source price waterfall,
+Data loading: SimFin + EDGAR fundamentals, multi-source price waterfall,
 sector mapping, pickle caching, universe construction,
 training/tradeable split, S&P index tickers.
 """
@@ -22,6 +22,10 @@ from config import (
     SIMFIN_KEY, FMP_KEY, SECTOR_ETFS, FORCE_RECOMPUTE, VOL_FLOOR,
 )
 from utils import strip_tz, elapsed
+from edgar import (
+    load_cik_map, fetch_edgar_fundamentals, merge_edgar_into_simfin,
+    get_edgar_sector_map,
+)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -154,12 +158,12 @@ def load_sector_map(cache, cache_path):
 # Universe construction
 # ═══════════════════════════════════════════════════════════════
 
-def build_universe(df_inc, df_bal, df_cf, sector_map):
+def build_universe(df_inc, df_bal, df_cf, sector_map, min_quarters=8):
     """Build filtered stock universe (exclude Financials only)."""
     cutoff = pd.Timestamp.now() - pd.DateOffset(years=4)
-    u_raw = set(df_inc.groupby('Ticker').size()[lambda x: x >= 8].index)
+    u_raw = set(df_inc.groupby('Ticker').size()[lambda x: x >= min_quarters].index)
     for ds in [df_bal, df_cf]:
-        u_raw &= set(ds.groupby('Ticker').size()[lambda x: x >= 8].index)
+        u_raw &= set(ds.groupby('Ticker').size()[lambda x: x >= min_quarters].index)
     universe_all = sorted(
         tk for tk in u_raw
         if df_inc.loc[tk].index.max() >= cutoff
@@ -489,7 +493,44 @@ def load_all_data():
     )
     df_inc, df_bal, df_cf = load_simfin(cache, cache_path)
     sector_map = load_sector_map(cache, cache_path)
-    universe = build_universe(df_inc, df_bal, df_cf, sector_map)
+
+    # ── EDGAR: fill fundamental gaps ──
+    simfin_universe = build_universe(df_inc, df_bal, df_cf, sector_map)
+    sp_tickers = get_sp_index_tickers()
+
+    # Identify tickers needing EDGAR data
+    simfin_tickers_with_data = set(
+        df_inc.groupby('Ticker').size()[lambda x: x >= 4].index
+    )
+    all_candidate_tickers = set(simfin_universe) | sp_tickers
+    needs_fundamentals = all_candidate_tickers - simfin_tickers_with_data
+
+    # Also include SimFin tickers with sparse data (<8 quarters)
+    sparse_simfin = set(
+        df_inc.groupby('Ticker').size()[lambda x: (x >= 1) & (x < 8)].index
+    ) & set(simfin_universe)
+    needs_fundamentals |= sparse_simfin
+
+    try:
+        cik_map = load_cik_map(cache_dir)
+        # Get SIC-based sector mapping for EDGAR-only tickers
+        sic_sectors = get_edgar_sector_map(cik_map, needs_fundamentals, cache_dir)
+        for tk, sec in sic_sectors.items():
+            if tk not in sector_map:
+                sector_map[tk] = sec
+
+        edgar_data = fetch_edgar_fundamentals(
+            sorted(needs_fundamentals), cik_map, cache_dir
+        )
+        df_inc, df_bal, df_cf, edgar_filing_meta = merge_edgar_into_simfin(
+            df_inc, df_bal, df_cf, edgar_data, sector_map
+        )
+    except Exception as e:
+        print(f"  EDGAR failed: {e}")
+        edgar_filing_meta = {}
+
+    # Rebuild universe with EDGAR-expanded data (lower min to 4 for EDGAR tickers)
+    universe = build_universe(df_inc, df_bal, df_cf, sector_map, min_quarters=4)
     price_dict, unavail = download_all_prices(universe, cache, cache_path)
 
     # Training universe: all tickers with prices (includes delisted with history)
@@ -523,4 +564,5 @@ def load_all_data():
         price_dict=price_dict, unavail=unavail,
         spy_close=spy_close, spy_ret=spy_ret,
         vix_series=vix_series, sector_etf_ret=sector_etf_ret,
+        edgar_filing_meta=edgar_filing_meta,
     )
