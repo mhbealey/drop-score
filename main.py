@@ -12,7 +12,7 @@ def install(pkg):
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", pkg])
 
 for pkg in ["simfin", "yfinance", "xgboost", "lightgbm", "scikit-learn",
-            "matplotlib", "tqdm"]:
+            "matplotlib", "tqdm", "lxml"]:
     try:
         __import__(pkg.replace("-", "_"))
     except ImportError:
@@ -215,13 +215,16 @@ if UNIVERSE_MODE in ("sp_index", "both"):
             # Filter to tickers we have data for
             all_tickers = set(data['df_dev']['ticker'].unique())
             sp_overlap = sp_tickers & all_tickers
-            print(f"  S&P index overlap with our data: {len(sp_overlap)}/{len(sp_tickers)}")
-            if len(sp_overlap) >= 50:
-                result_b = run_pipeline(data, "S&P 400+600", ticker_subset=sp_overlap)
-                ho_b = holdout_eval(result_b, "S&P 400+600")
-                pipeline_results['S&P 400+600'] = result_b
-            else:
-                print(f"  Too few overlapping tickers ({len(sp_overlap)}), skipping")
+            # Also check overlap with price cache
+            price_overlap = sp_tickers & set(data['price_dict'].keys())
+            print(f"  S&P index: {len(sp_tickers)} tickers")
+            print(f"  Overlap with feature data: {len(sp_overlap)}/{len(sp_tickers)}")
+            print(f"  Overlap with price cache: {len(price_overlap)}/{len(sp_tickers)}")
+            if len(sp_overlap) < 200:
+                print(f"  WARNING: low overlap ({len(sp_overlap)} tickers), running anyway")
+            result_b = run_pipeline(data, "S&P 400+600", ticker_subset=sp_overlap)
+            ho_b = holdout_eval(result_b, "S&P 400+600")
+            pipeline_results['S&P 400+600'] = result_b
         else:
             print("  Could not get S&P index tickers, skipping")
 
