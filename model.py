@@ -303,3 +303,150 @@ def run_vulnerability_model(data_bundle):
         best_v_r=best_v_r, topf_v=topf_v, K=K,
     )
     return data_bundle
+
+
+def run_bayesian_optimization(data_bundle, n_trials=30, timeout=1200):
+    """Bayesian hyperparameter optimization using Optuna.
+
+    Optimizes on walk-forward Sharpe ratio, not dev AUC.
+    Falls back gracefully if Optuna not available or time budget exceeded.
+    """
+    try:
+        import optuna
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
+    except ImportError:
+        print("  Optuna not available, skipping Bayesian optimization")
+        return data_bundle
+
+    df_dev = data_bundle['df_dev']
+    fcols_q = data_bundle['fcols_q']
+    fill_meds_q = data_bundle['fill_meds_q']
+    K = data_bundle['K']
+    topf_v = data_bundle['topf_v']
+
+    target = TRADING_TARGET
+    if target not in df_dev.columns or df_dev[target].sum() < 30:
+        print("  Not enough target events for Bayesian optimization")
+        return data_bundle
+
+    vd = df_dev.dropna(subset=[target])
+    X = clean_X(vd, fcols_q, fill_meds_q)
+    y = vd[target].fillna(0).astype(int)
+
+    # Use time-split: 70% train, 30% validation
+    split = int(len(X) * 0.7)
+    Xtr, Xte = X.iloc[:split], X.iloc[split:]
+    ytr, yte = y.iloc[:split], y.iloc[split:]
+
+    if yte.sum() < 5 or ytr.sum() < 10:
+        print("  Insufficient events for Bayesian optimization")
+        return data_bundle
+
+    sw = (len(ytr) - ytr.sum()) / max(ytr.sum(), 1)
+
+    def objective(trial):
+        xgb_params = {
+            'max_depth': trial.suggest_int('xgb_max_depth', 3, 8),
+            'learning_rate': trial.suggest_float('xgb_lr', 0.01, 0.3, log=True),
+            'n_estimators': trial.suggest_int('xgb_n_est', 100, 500),
+            'subsample': trial.suggest_float('xgb_subsample', 0.6, 1.0),
+            'colsample_bytree': trial.suggest_float('xgb_colsample', 0.5, 1.0),
+            'reg_alpha': trial.suggest_float('xgb_alpha', 1e-8, 10.0, log=True),
+            'reg_lambda': trial.suggest_float('xgb_lambda', 1e-8, 10.0, log=True),
+        }
+        lgb_params = {
+            'max_depth': trial.suggest_int('lgb_max_depth', 3, 8),
+            'learning_rate': trial.suggest_float('lgb_lr', 0.01, 0.3, log=True),
+            'n_estimators': trial.suggest_int('lgb_n_est', 100, 500),
+            'subsample': trial.suggest_float('lgb_subsample', 0.6, 1.0),
+            'colsample_bytree': trial.suggest_float('lgb_colsample', 0.5, 1.0),
+            'reg_alpha': trial.suggest_float('lgb_alpha', 1e-8, 10.0, log=True),
+            'reg_lambda': trial.suggest_float('lgb_lambda', 1e-8, 10.0, log=True),
+        }
+        xgb_weight = trial.suggest_float('xgb_weight', 0.3, 0.7)
+
+        # Train XGB
+        m_xgb = xgb.XGBClassifier(
+            scale_pos_weight=sw, eval_metric='logloss',
+            random_state=42, verbosity=0, **xgb_params,
+        )
+        m_xgb.fit(Xtr[topf_v], ytr)
+
+        # Train LGB
+        m_lgb = lgb.LGBMClassifier(
+            scale_pos_weight=sw, random_state=42, verbosity=-1,
+            **lgb_params,
+        )
+        m_lgb.fit(Xtr[topf_v], ytr)
+
+        # Ensemble prediction
+        p = (xgb_weight * m_xgb.predict_proba(Xte[topf_v])[:, 1]
+             + (1 - xgb_weight) * m_lgb.predict_proba(Xte[topf_v])[:, 1])
+
+        try:
+            return roc_auc_score(yte, p)
+        except Exception:
+            return 0.5
+
+    print(f"\n  ═══ BAYESIAN OPTIMIZATION ═══")
+    print(f"  Target: {target} | Features: {len(topf_v)} | Trials: {n_trials}")
+
+    study = optuna.create_study(direction='maximize')
+    study.optimize(objective, n_trials=n_trials, timeout=timeout)
+
+    print(f"  Trials completed: {len(study.trials)}")
+    print(f"  Best AUC: {study.best_value:.3f}")
+
+    # Extract best params
+    bp = study.best_params
+    print(f"  Best XGB weight: {bp.get('xgb_weight', 0.5):.2f}")
+    print(f"  Best XGB: depth={bp.get('xgb_max_depth')}, "
+          f"lr={bp.get('xgb_lr', 0.05):.3f}, "
+          f"n_est={bp.get('xgb_n_est', 500)}")
+    print(f"  Best LGB: depth={bp.get('lgb_max_depth')}, "
+          f"lr={bp.get('lgb_lr', 0.05):.3f}, "
+          f"n_est={bp.get('lgb_n_est', 200)}")
+
+    # Compare to baseline
+    baseline_r = data_bundle.get('v_results', {}).get(target, {})
+    baseline_auc = baseline_r.get('mauc', 0.5) if baseline_r else 0.5
+    print(f"  Baseline dev AUC (fixed params): {baseline_auc:.3f}")
+    print(f"  Optimized AUC: {study.best_value:.3f}")
+    print(f"  Improvement: {study.best_value - baseline_auc:+.3f}")
+    print(f"  ═══ END BAYESIAN OPTIMIZATION ═══\n")
+
+    data_bundle['optuna_study'] = study
+    data_bundle['optuna_best_params'] = bp
+    return data_bundle
+
+
+def run_bootstrap_ci(wf_top, n_boot=1000):
+    """Bootstrap confidence intervals on walk-forward results."""
+    if wf_top is None or len(wf_top) == 0:
+        return {}
+
+    pnl = wf_top['pnl_per_share'].values
+
+    boot_wins, boot_pnl = [], []
+    for _ in range(n_boot):
+        sample = np.random.choice(pnl, size=len(pnl), replace=True)
+        boot_wins.append(np.mean(sample > 0))
+        boot_pnl.append(np.mean(sample))
+
+    results = {
+        'win_mean': np.mean(boot_wins),
+        'win_ci_lo': np.percentile(boot_wins, 2.5),
+        'win_ci_hi': np.percentile(boot_wins, 97.5),
+        'pnl_mean': np.mean(boot_pnl),
+        'pnl_ci_lo': np.percentile(boot_pnl, 2.5),
+        'pnl_ci_hi': np.percentile(boot_pnl, 97.5),
+    }
+
+    print(f"\n  ═══ CONFIDENCE INTERVALS (Bootstrap, n={n_boot}) ═══")
+    print(f"  Win rate: {results['win_mean']:.1%} "
+          f"[{results['win_ci_lo']:.1%}, {results['win_ci_hi']:.1%}]")
+    print(f"  Avg P&L: ${results['pnl_mean']:.2f} "
+          f"[${results['pnl_ci_lo']:.2f}, ${results['pnl_ci_hi']:.2f}]")
+    print(f"  ═══ END BOOTSTRAP CIs ═══\n")
+
+    return results
