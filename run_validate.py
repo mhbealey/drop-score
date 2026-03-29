@@ -18,7 +18,7 @@ from config import (
     t_start, log, TRADING_TARGET, TRADING_HOLD, ENTRY_MODE,
     UNIVERSE_A_FEATURES, BENCHMARKS,
 )
-from utils import elapsed
+from utils import elapsed, validate_data_bundle, validate_features
 
 # v18 pinned benchmarks from config.BenchmarkGates
 V18 = {
@@ -42,6 +42,8 @@ def main():
     with open('data/data_bundle.pkl', 'rb') as f:
         data = pickle.load(f)
     log.info(f"  Loaded data bundle")
+    validate_data_bundle(data, stage="validate")
+    validate_features(UNIVERSE_A_FEATURES, context="Universe A")
 
     # Universe A: SimFin-fundamental tickers only (no EDGAR)
     # simfin_universe = tickers from build_universe() on pure SimFin data

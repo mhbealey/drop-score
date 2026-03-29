@@ -305,6 +305,12 @@ SEC_HEADERS: Dict[str, str] = {'User-Agent': 'DropScore michael@dropscore.dev'}
 SEC_RATE_DELAY: float = 0.12
 
 
+# ── Known Features ──────────────────────────────────────
+# Union of all features referenced in locked universe configs.
+# Used by input validation to catch typos / config drift.
+KNOWN_FEATURES: Set[str] = set(FeatureConfig().universe_a + FeatureConfig().universe_b)
+
+
 # ── Instantiate defaults ─────────────────────────────────
 TRADING = TradingConfig()
 FEATURES = FeatureConfig()

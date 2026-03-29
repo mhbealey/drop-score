@@ -24,7 +24,7 @@ from config import (
     UNIVERSE_A_FEATURES, UNIVERSE_B_FEATURES,
     SECTOR_ETFS, BENCHMARKS,
 )
-from utils import elapsed, ensure_series
+from utils import elapsed, ensure_series, validate_data_bundle, validate_features
 from data import get_sp_index_tickers
 from model import run_bayesian_optimization, run_bootstrap_ci
 from walkforward import run_walkforward_ab
@@ -56,6 +56,8 @@ def main():
     with open('data/data_bundle.pkl', 'rb') as f:
         data = pickle.load(f)
     log.info(f"  Loaded data bundle")
+    validate_data_bundle(data, stage="model")
+    validate_features(UNIVERSE_B_FEATURES, context="Universe B")
 
     # Load Universe A results from Stage 2
     universe_a = {}

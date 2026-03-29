@@ -18,7 +18,7 @@ from config import (
     t_start, log, TRADING_TARGET, TRADING_HOLD, ENTRY_MODE,
     UNIVERSE_A_FEATURES, UNIVERSE_B_FEATURES,
 )
-from utils import elapsed
+from utils import elapsed, validate_data_bundle
 from data import load_all_data
 from features import prepare_features
 from edgar import run_feature_qa, edgar_field_diagnostic
@@ -66,6 +66,9 @@ def main():
     log.info(f"    Features:             {len(data['fcols_q'])} columns")
     log.info(f"    Targets:              {len(data.get('tcols', []))} targets")
     log.info(f"  {'='*50}\n")
+
+    # Validate bundle before saving
+    validate_data_bundle(data, stage="data")
 
     # Save portable bundle (strip cache/file refs not needed downstream)
     strip_keys = {

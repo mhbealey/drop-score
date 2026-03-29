@@ -16,6 +16,7 @@ from config import (
 from model import run_vulnerability_model, run_model, run_bayesian_optimization, run_bootstrap_ci
 from walkforward import run_walkforward
 from equity import run_equity_scenarios
+from utils import validate_data_bundle, validate_features
 
 
 class Tee:
@@ -59,6 +60,7 @@ def run_pipeline(data_bundle: dict, label: str,
     bundle = dict(data_bundle)  # shallow copy
 
     if locked_features:
+        validate_features(locked_features, context=label)
         bundle['locked_features'] = locked_features
 
     if ticker_subset is not None:
