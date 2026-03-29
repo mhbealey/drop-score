@@ -323,7 +323,10 @@ def _run_diagnostics(data_bundle, wf_top, all_wf_trades, best_sc, spy_close, pri
 
     _staged_entry_diagnostic(all_wf_trades, price_dict)
     _spy_correlation_diagnostic(best_sc, spy_close)
-    _earnings_proximity_diagnostic(data_bundle, wf_top)
+    try:
+        _earnings_proximity_diagnostic(data_bundle, wf_top)
+    except (KeyError, Exception) as e:
+        print(f"\n  EARNINGS PROXIMITY: skipped ({e})")
 
     print(f"  [{time.time()-t0:.0f}s] {elapsed()}")
     print()

@@ -45,11 +45,17 @@ def main():
         data = pickle.load(f)
     print(f"  Loaded data bundle")
 
-    # Universe A: SimFin-only tickers
-    simfin_universe = set(data.get('simfin_universe', []))
+    # Universe A: SimFin-price tickers only (~960 in v18)
+    # Use simfin_price_tickers (tickers with SimFin bulk price data),
+    # NOT simfin_universe (all SimFin fundamentals = ~4000 tickers).
+    # v18 Universe A was the intersection of fundamentals + SimFin prices.
+    simfin_price_tickers = data.get('simfin_price_tickers', set())
     all_tickers = set(data['df_dev']['ticker'].unique())
-    simfin_only = simfin_universe & all_tickers
-    print(f"  SimFin universe: {len(simfin_universe)} -> {len(simfin_only)} in dev set")
+    simfin_only = simfin_price_tickers & all_tickers
+    print(f"  SimFin price tickers: {len(simfin_price_tickers)}")
+    print(f"  In dev set: {len(simfin_only)}")
+    assert 800 < len(simfin_only) < 1200, \
+        f"Universe A should be ~960, got {len(simfin_only)}"
 
     # Run pipeline with locked features
     result = run_pipeline(

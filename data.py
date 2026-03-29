@@ -248,7 +248,7 @@ def _add_price(price_dict, tk, df, min_rows=60):
 
 
 def download_all_prices(universe, cache, cache_path):
-    """Multi-source price waterfall. Returns (price_dict, unavail_set).
+    """Multi-source price waterfall. Returns (price_dict, unavail_set, simfin_price_tickers).
 
     Sources tried in order:
     1. Local cache (instant)
@@ -260,6 +260,7 @@ def download_all_prices(universe, cache, cache_path):
     price_dict = cache.get('prices', {})
     unavail = cache.get('unavailable_tickers', set())
     counts = {'cache': 0, 'simfin': 0, 'yf_batch': 0, 'fmp': 0, 'yf_individual': 0}
+    simfin_price_tickers = set()  # Track which tickers have SimFin prices
 
     # Clear stale unavail set (retry after 7 days)
     unavail_ts = cache.get('unavail_ts', 0)
@@ -280,6 +281,18 @@ def download_all_prices(universe, cache, cache_path):
             except Exception:
                 pass
 
+    # ── Always load SimFin price ticker list (needed for Universe A filtering) ──
+    sp = None
+    try:
+        sf.set_api_key(SIMFIN_KEY)
+        sf.set_data_dir('~/simfin_data/')
+        sp = sf.load_shareprices(market='us', variant='daily')
+        if sp is not None and len(sp) > 0:
+            simfin_price_tickers = set(sp.index.get_level_values('Ticker'))
+            print(f"  SimFin price universe: {len(simfin_price_tickers)} tickers")
+    except Exception as e:
+        print(f"  SimFin price ticker list: {e}")
+
     # What do we still need?
     all_need = [tk for tk in universe if tk not in price_dict and tk not in unavail]
     cached_count = len([tk for tk in universe if tk in price_dict])
@@ -289,41 +302,36 @@ def download_all_prices(universe, cache, cache_path):
         skipped = len([tk for tk in universe if tk in unavail])
         print(f"  Cache: {cached_count} prices | {skipped} unavailable | "
               f"{len(all_need)} to download")
-        return price_dict, unavail
+        return price_dict, unavail, simfin_price_tickers
 
     print(f"  Need prices for {len(all_need)} tickers ({cached_count} cached, "
           f"{len(unavail)} known-unavailable)...")
 
-    # ── Source 2: SimFin daily share prices (bulk) ──
+    # ── Source 2: SimFin daily share prices (use already-loaded sp) ──
     need = [tk for tk in all_need if tk not in price_dict]
-    if need:
+    if need and sp is not None and len(sp) > 0:
         try:
-            sf.set_api_key(SIMFIN_KEY)
-            sf.set_data_dir('~/simfin_data/')
-            sp = sf.load_shareprices(market='us', variant='daily')
-            if sp is not None and len(sp) > 0:
-                sf_tickers = set(sp.index.get_level_values('Ticker'))
-                for tk in need:
-                    if tk in sf_tickers:
-                        try:
-                            tkd = sp.loc[tk]
-                            # Map SimFin column names
-                            rename = {}
-                            for col in tkd.columns:
-                                cl = col.lower()
-                                if 'close' in cl:
-                                    rename[col] = 'Close'
-                                elif 'volume' in cl:
-                                    rename[col] = 'Volume'
-                            if rename:
-                                tkd = tkd.rename(columns=rename)
-                            if _add_price(price_dict, tk, tkd):
-                                counts['simfin'] += 1
-                        except Exception:
-                            pass
-                print(f"    SimFin prices: +{counts['simfin']}")
-                cache['prices'] = price_dict
-                save_cache(cache, cache_path)
+            sf_tickers = simfin_price_tickers
+            for tk in need:
+                if tk in sf_tickers:
+                    try:
+                        tkd = sp.loc[tk]
+                        rename = {}
+                        for col in tkd.columns:
+                            cl = col.lower()
+                            if 'close' in cl:
+                                rename[col] = 'Close'
+                            elif 'volume' in cl:
+                                rename[col] = 'Volume'
+                        if rename:
+                            tkd = tkd.rename(columns=rename)
+                        if _add_price(price_dict, tk, tkd):
+                            counts['simfin'] += 1
+                    except Exception:
+                        pass
+            print(f"    SimFin prices: +{counts['simfin']}")
+            cache['prices'] = price_dict
+            save_cache(cache, cache_path)
         except Exception as e:
             print(f"    SimFin prices: {e}")
 
@@ -430,7 +438,7 @@ def download_all_prices(universe, cache, cache_path):
     print(f"    Still missing:        {len(still_missing):>5}")
     print(f"  {'='*45}")
 
-    return price_dict, unavail
+    return price_dict, unavail, simfin_price_tickers
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -571,7 +579,8 @@ def load_all_data():
     sp_in_universe = sp_tickers & universe_set
     print(f"  S&P in universe after EDGAR: {len(sp_in_universe)}/{len(sp_tickers)}")
 
-    price_dict, unavail = download_all_prices(universe, cache, cache_path)
+    price_dict, unavail, simfin_price_tickers = download_all_prices(universe, cache, cache_path)
+    print(f"  SimFin price tickers: {len(simfin_price_tickers)}")
 
     training_universe = sorted(
         set(universe) & set(price_dict.keys())
@@ -599,6 +608,7 @@ def load_all_data():
         sector_map=sector_map,
         universe=training_universe,
         simfin_universe=sorted(simfin_universe_set),
+        simfin_price_tickers=simfin_price_tickers,
         simfin_max_date=simfin_max_date,
         tradeable_tickers=tradeable_tickers,
         price_dict=price_dict, unavail=unavail,
