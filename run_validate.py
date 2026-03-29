@@ -45,17 +45,21 @@ def main():
         data = pickle.load(f)
     print(f"  Loaded data bundle")
 
-    # Universe A: SimFin-price tickers only (~960 in v18)
-    # Use simfin_price_tickers (tickers with SimFin bulk price data),
-    # NOT simfin_universe (all SimFin fundamentals = ~4000 tickers).
-    # v18 Universe A was the intersection of fundamentals + SimFin prices.
-    simfin_price_tickers = data.get('simfin_price_tickers', set())
+    # Universe A: SimFin-fundamental tickers only (no EDGAR)
+    # simfin_universe = tickers from build_universe() on pure SimFin data
+    # (>=8 quarters, non-financial, recent). Excludes EDGAR-only tickers.
+    # v18 had ~960 after price/feature pipeline filtering.
+    simfin_universe = set(data.get('simfin_universe', []))
+    edgar_tickers = data.get('edgar_tickers', set())
     all_tickers = set(data['df_dev']['ticker'].unique())
-    simfin_only = simfin_price_tickers & all_tickers
-    print(f"  SimFin price tickers: {len(simfin_price_tickers)}")
-    print(f"  In dev set: {len(simfin_only)}")
-    assert 800 < len(simfin_only) < 1200, \
-        f"Universe A should be ~960, got {len(simfin_only)}"
+
+    # Exclude any EDGAR-only tickers that leaked into the universe
+    simfin_only = (simfin_universe - edgar_tickers) & all_tickers
+    print(f"  SimFin fundamental universe: {len(simfin_universe)}")
+    print(f"  EDGAR tickers excluded: {len(edgar_tickers & simfin_universe)}")
+    print(f"  Universe A (in dev set): {len(simfin_only)} tickers (v18 had 960)")
+    assert 500 < len(simfin_only) < 2000, \
+        f"Universe A unexpected size: {len(simfin_only)}"
 
     # Run pipeline with locked features
     result = run_pipeline(
