@@ -200,7 +200,7 @@ def test0_extend_backtest(data):
         log.info("  WARNING: Could not fetch extended SPY")
 
     # --- Step 4: Merge into combined dataset ---
-    def _dedup_index(px):
+    def _dedup_px(px):
         """Deduplicate index on a DataFrame or Series."""
         if isinstance(px, pd.DataFrame) and px.index.duplicated().any():
             return px[~px.index.duplicated(keep='last')]
@@ -237,9 +237,9 @@ def test0_extend_backtest(data):
             full_price_dict[tk] = combined
 
     # Merge SPY
-    existing_spy = _dedup_index(data['spy_close'])
+    existing_spy = _dedup_px(data['spy_close'])
     if len(spy_ext) > 0:
-        spy_ext = _dedup_index(spy_ext)
+        spy_ext = _dedup_px(spy_ext)
         full_spy = pd.concat([spy_ext, existing_spy])
         full_spy = full_spy[~full_spy.index.duplicated(keep='last')].sort_index()
     else:
