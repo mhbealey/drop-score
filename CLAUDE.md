@@ -81,6 +81,81 @@ It's doing crowd work on your codebase.
 
 -----
 
+## RESILIENCE PRINCIPLES
+
+Adapted from mobile-first engineering — because a quant pipeline running
+overnight has the same problems as an app in someone's pocket: the network
+is unreliable, the process can die at any time, and nobody's awake to fix it.
+
+- **Offline-first / cache-first:** Assume the network is unreliable. SEC EDGAR
+  throttles, yFinance times out, SimFin goes down. Cache aggressively — raw JSON,
+  price DataFrames, intermediates. Never re-download what you already have.
+  Queue failed fetches and retry with exponential backoff.
+
+- **Process death recovery:** The pipeline can be killed mid-stage (CI timeout,
+  OOM, spot instance preemption). Persist critical state to disk after each
+  phase. On restart, detect partial state and resume — don't re-run from scratch.
+  Every `pickle.dump()` should have a corresponding "resume from checkpoint" path.
+
+- **Performance budgets:** Stage 1 (data): <20 min cold, <2 min cached.
+  Stage 2 (validate): <5 min. Stage 3 (model): <15 min. Stage 4 (analysis):
+  <75 min. If a stage exceeds its budget, investigate before adding timeout.
+
+- **Graceful degradation:** If EDGAR is down, run with SimFin-only data.
+  If yFinance fails for some tickers, continue with what you have. If Optuna
+  hits a wall, fall back to default hyperparameters. Never let one data source
+  failure kill the entire pipeline.
+
+- **Error boundaries:** Each pipeline stage is an error boundary. A crash in
+  analysis must not corrupt model results. A crash in model must not corrupt
+  validated data. The crash reporting wrapper (`try/except` with frame inspection)
+  is the equivalent of a mobile error boundary — catch, log everything, exit
+  cleanly.
+
+- **Battery awareness (CI cost awareness):** Avoid redundant computation.
+  Cache SimFin downloads weekly. Cache EDGAR raw JSON indefinitely. Don't
+  re-train models if the data hasn't changed. Every unnecessary minute of
+  CI is money burning.
+
+-----
+
+## TESTING STRATEGY
+
+- **Smoke tests:** `test_scalar.py` — verify utility functions don't crash.
+  Fast, runs on every commit.
+- **Benchmark gates:** Each stage validates its own output before passing
+  downstream. Stage 2 checks AUC thresholds. Stage 3 checks holdout performance.
+  Stage 4 runs 5 stress tests. These ARE the integration tests.
+- **Null hypothesis tests:** Random flags in Stage 4 (entry decomposition)
+  prove the model adds alpha vs. chance. This is the quant equivalent of
+  an A/B test.
+- **Temporal persistence:** Split-half test in Stage 4 — train on 2012-2018,
+  test on 2019-2024 and vice versa. If it works in both directions, the
+  signal is real.
+- **Manual checklist before trusting results:**
+  - Walk-forward includes trades from multiple market regimes (bull + bear)
+  - Top-25% win rate > 65% with n > 50 trades
+  - Edge survives without 2022 (bear market removal test)
+  - Model alpha > 0 vs random baseline
+  - No single quarter dominates P&L (Herfindahl check)
+
+-----
+
+## FORBIDDEN PATTERNS
+
+- Never `pickle.load()` user-supplied or network-fetched data without validation.
+- Never catch bare `except:` — at minimum catch `Exception` and log the type.
+- Never hardcode thresholds in logic — put them in `config.py` dataclasses.
+- Never `print()` in production code — use `log.info()`. Print is for crash
+  reports only.
+- Never trust DataFrame index uniqueness after a `pd.concat` — always deduplicate.
+- Never assume yFinance column names are unique (`auto_adjust=True` duplicates `Close`).
+- Never commit `.env`, API keys, or pickle files to the repo.
+- Never push to main without CI passing all stages.
+- Never add `assert` in production flow — asserts vanish with `python -O`.
+
+-----
+
 ## CURRENT PROJECT SNAPSHOT
 
 **Drop Score v18.3** — A 4-stage quantitative finance pipeline:
