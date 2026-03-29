@@ -179,3 +179,48 @@ jobs:
           name: results-${{ github.sha }}
           path: results/
           retention-days: 30
+
+  # ─────────────────────────────────────────
+  # STAGE 4: Deep Analysis (~50-75 min)
+  # ─────────────────────────────────────────
+  analysis:
+    needs: model
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Restore data cache
+        uses: actions/cache@v4
+        with:
+          path: data/
+          key: drop-score-data-v3-${{ github.run_number }}
+          restore-keys: |
+            drop-score-data-v3-
+            drop-score-data-
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Download data bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: data-bundle
+          path: data/
+
+      - name: Run deep analysis
+        run: python run_analysis.py
+
+      - name: Upload analysis logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: analysis-logs
+          path: results/analysis_*.txt
+          retention-days: 30

@@ -487,3 +487,116 @@ def run_walkforward_ab(data_bundle: dict, xgb_override: dict,
 
     log.info(f"  [{label}] {len(wf_df)} trades, {time.time()-t0:.0f}s")
     return wf_df, tiers
+
+
+def run_walkforward_split(data_bundle: dict, split_date: str,
+                          train_side: str = "early") -> Tuple[pd.DataFrame, dict]:
+    """Single train/test split for temporal persistence testing.
+
+    Trains one model on all data from one side of split_date,
+    scores the other side, then generates trades on the test period.
+
+    Args:
+        split_date: Date string (e.g. '2018-12-31') to split on.
+        train_side: 'early' trains on pre-split, tests on post-split.
+                    'late' trains on post-split, tests on pre-split.
+
+    Returns (wf_df, tiers).
+    """
+    df_dev = data_bundle['df_dev']
+    fcols_q = data_bundle['fcols_q']
+    fill_meds_q = data_bundle['fill_meds_q']
+    K = data_bundle['K']
+    price_dict = data_bundle['price_dict']
+    tradeable_tickers = data_bundle.get('tradeable_tickers')
+
+    wf_tgt = TRADING_TARGET
+    v_results = data_bundle.get('v_results', {})
+    if wf_tgt not in v_results and v_results:
+        wf_tgt = max(v_results, key=lambda k: v_results[k]['mauc'])
+
+    split_ts = pd.Timestamp(split_date)
+    if train_side == "early":
+        train_df = df_dev[df_dev['report_date'] <= split_ts]
+        test_df = df_dev[df_dev['report_date'] > split_ts]
+    else:
+        train_df = df_dev[df_dev['report_date'] > split_ts]
+        test_df = df_dev[df_dev['report_date'] <= split_ts]
+
+    log.info(f"  Split train={train_side}: {len(train_df)} train, {len(test_df)} test rows")
+
+    if wf_tgt not in train_df.columns or train_df[wf_tgt].sum() < 30:
+        log.warning(f"  Target {wf_tgt} has insufficient events in train set")
+        return pd.DataFrame(), {}
+
+    # Train single model on all training data
+    vd = train_df.dropna(subset=[wf_tgt])
+    X_train = clean_X(vd, fcols_q, fill_meds_q)
+    y_train = vd[wf_tgt].fillna(0).astype(int)
+    sw = (len(y_train) - y_train.sum()) / max(y_train.sum(), 1)
+
+    # Feature selection
+    sel = xgb.XGBClassifier(
+        n_estimators=50, max_depth=4, learning_rate=0.05,
+        scale_pos_weight=sw, subsample=0.8, colsample_bytree=0.8,
+        eval_metric='logloss', random_state=42, verbosity=0,
+    )
+    sel.fit(X_train, y_train)
+    feats = pd.Series(
+        sel.feature_importances_, index=fcols_q
+    ).nlargest(K).index.tolist()
+
+    # Full model
+    mdl = xgb.XGBClassifier(
+        n_estimators=200, max_depth=5, learning_rate=0.05,
+        scale_pos_weight=sw, subsample=0.8, colsample_bytree=0.8,
+        reg_alpha=0.1, reg_lambda=1.0,
+        eval_metric='logloss', random_state=42, verbosity=0,
+    )
+    mdl.fit(X_train[feats], y_train)
+
+    # Score test data by quarter
+    X_test = clean_X(test_df, fcols_q, fill_meds_q)
+    try:
+        scores = mdl.predict_proba(X_test[feats])[:, 1]
+    except Exception:
+        return pd.DataFrame(), {}
+
+    test_df = test_df.copy()
+    test_df['wf_score'] = scores
+
+    # Group into quarters and generate trades
+    quarters = sorted(test_df['report_date'].dt.to_period('Q').unique())
+    scored_quarters = []
+    for q in quarters:
+        q_data = test_df[
+            (test_df['report_date'] >= q.start_time)
+            & (test_df['report_date'] <= q.end_time)
+        ]
+        if len(q_data) < 5:
+            continue
+        picks = q_data.nlargest(min(200, len(q_data)), 'wf_score')
+        picks = picks[picks['avg_vol'] >= VOL_FLOOR]
+        if 'sector' in picks.columns:
+            mps = max(3, int(len(picks) * SECTOR_CAP))
+            capped = []
+            sc = Counter()
+            for _, row in picks.iterrows():
+                sec = row.get('sector', 'Other')
+                if sc[sec] < mps:
+                    capped.append(row)
+                    sc[sec] += 1
+            picks = pd.DataFrame(capped)
+        scored_quarters.append((q, picks))
+
+    use_conf = (ENTRY_MODE == "confirmed")
+    trades = _generate_trades(
+        scored_quarters, TRADING_HOLD, price_dict,
+        use_confirmation=use_conf,
+        tradeable_tickers=tradeable_tickers,
+    )
+    wf_df = pd.DataFrame(trades) if trades else pd.DataFrame()
+    tiers = _tier_stats(wf_df) if len(wf_df) >= 20 else {}
+
+    log.info(f"  Split result: {len(wf_df)} trades")
+    return wf_df, tiers
