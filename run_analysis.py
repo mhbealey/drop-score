@@ -877,5 +877,40 @@ DROP SCORE — DEEP ANALYSIS RESULTS
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as e:
+        import traceback, sys as _sys
+        print("\n" + "=" * 70)
+        print("CRASH REPORT")
+        print("=" * 70)
+        print(f"  Error: {type(e).__name__}: {e}")
+        print(f"\n  Traceback:")
+        traceback.print_exc()
+        tb = _sys.exc_info()[2]
+        while tb.tb_next:
+            tb = tb.tb_next
+        frame = tb.tb_frame
+        print(f"\n  Local variables in failing frame "
+              f"({frame.f_code.co_filename}:{frame.f_lineno}):")
+        for key, val in frame.f_locals.items():
+            try:
+                if hasattr(val, 'shape'):
+                    print(f"    {key}: {type(val).__name__} shape={val.shape} "
+                          f"dtype={getattr(val, 'dtype', 'N/A')}")
+                    if hasattr(val, 'index'):
+                        print(f"      index: {type(val.index).__name__}, "
+                              f"duplicated={val.index.duplicated().sum()}, "
+                              f"first5={list(val.index[:5])}")
+                elif hasattr(val, '__len__') and not isinstance(val, str):
+                    print(f"    {key}: {type(val).__name__} len={len(val)}")
+                else:
+                    r = repr(val)
+                    if len(r) < 200:
+                        print(f"    {key}: {r}")
+                    else:
+                        print(f"    {key}: {type(val).__name__} (too large)")
+            except Exception:
+                print(f"    {key}: <could not inspect>")
+        _sys.exit(1)
     teardown_logging(_log_file, _log_path)
