@@ -1,17 +1,54 @@
 """Utility functions shared across the Drop Score pipeline."""
-from typing import Any, List, Tuple, Union
+from contextlib import contextmanager
+from typing import Any, Generator, List, Tuple, Union
 
 import time
 import numpy as np
 import pandas as pd
 
-from config import t_start
+from config import t_start, log
 
+
+# ── Exceptions ──────────────────────────────────────────────
+
+class DropScoreError(Exception):
+    """Base exception for Drop Score."""
+    pass
+
+
+class DataError(DropScoreError):
+    """Data loading or quality issue."""
+    pass
+
+
+class ValidationError(DropScoreError):
+    """Benchmark validation failure."""
+    pass
+
+
+class InsufficientDataError(DropScoreError):
+    """Not enough data to run analysis."""
+    pass
+
+
+# ── Timing ──────────────────────────────────────────────────
 
 def elapsed() -> str:
     """Return elapsed time since pipeline start as '[Xm Ys]'."""
     m, s = divmod(time.time() - t_start, 60)
     return f"[{int(m)}m{int(s)}s]"
+
+
+@contextmanager
+def timer(label: str) -> Generator[None, None, None]:
+    """Context manager that logs elapsed time for a block."""
+    start = time.time()
+    yield
+    secs = time.time() - start
+    if secs > 60:
+        log.info(f"  [{label}: {secs / 60:.1f} min]")
+    else:
+        log.info(f"  [{label}: {secs:.0f}s]")
 
 
 def get_col(df: pd.DataFrame, idx: Any, *names: str) -> float:

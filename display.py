@@ -7,19 +7,21 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
+from config import log
+
 
 def print_header(title: str, width: int = 70) -> None:
     """Print a section header with separator lines."""
-    print("=" * width)
-    print(title)
-    print("=" * width)
+    log.info("=" * width)
+    log.info(title)
+    log.info("=" * width)
 
 
 def print_section(title: str, width: int = 50) -> None:
     """Print a sub-section header."""
-    print(f"\n  {'=' * width}")
-    print(f"  {title}")
-    print(f"  {'=' * width}")
+    log.info(f"\n  {'=' * width}")
+    log.info(f"  {title}")
+    log.info(f"  {'=' * width}")
 
 
 def format_value(val: Any, fmt: str = '.3f') -> str:

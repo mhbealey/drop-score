@@ -15,7 +15,7 @@ from pipeline import setup_logging, teardown_logging, run_pipeline, holdout_eval
 _log_path, _log_file = setup_logging('validate')
 
 from config import (
-    t_start, TRADING_TARGET, TRADING_HOLD, ENTRY_MODE,
+    t_start, log, TRADING_TARGET, TRADING_HOLD, ENTRY_MODE,
     UNIVERSE_A_FEATURES, BENCHMARKS,
 )
 from utils import elapsed
@@ -32,16 +32,16 @@ V18 = {
 
 
 def main():
-    print("=" * 70)
-    print("DROP SCORE v18.3 — STAGE 2: VALIDATE (Universe A)")
-    print(f"  Target: {TRADING_TARGET} (LOCKED)")
-    print(f"  Features: {UNIVERSE_A_FEATURES} (LOCKED)")
-    print("=" * 70)
+    log.info("=" * 70)
+    log.info("DROP SCORE v18.3 — STAGE 2: VALIDATE (Universe A)")
+    log.info(f"  Target: {TRADING_TARGET} (LOCKED)")
+    log.info(f"  Features: {UNIVERSE_A_FEATURES} (LOCKED)")
+    log.info("=" * 70)
 
     # Load data bundle from Stage 1
     with open('data/data_bundle.pkl', 'rb') as f:
         data = pickle.load(f)
-    print(f"  Loaded data bundle")
+    log.info(f"  Loaded data bundle")
 
     # Universe A: SimFin-fundamental tickers only (no EDGAR)
     # simfin_universe = tickers from build_universe() on pure SimFin data
@@ -53,9 +53,9 @@ def main():
 
     # Exclude any EDGAR-only tickers that leaked into the universe
     simfin_only = (simfin_universe - edgar_tickers) & all_tickers
-    print(f"  SimFin fundamental universe: {len(simfin_universe)}")
-    print(f"  EDGAR tickers excluded: {len(edgar_tickers & simfin_universe)}")
-    print(f"  Universe A (in dev set): {len(simfin_only)} tickers (v18 had 960)")
+    log.info(f"  SimFin fundamental universe: {len(simfin_universe)}")
+    log.info(f"  EDGAR tickers excluded: {len(edgar_tickers & simfin_universe)}")
+    log.info(f"  Universe A (in dev set): {len(simfin_only)} tickers (v18 had 960)")
     assert 500 < len(simfin_only) < 5000, \
         f"Universe A unexpected size: {len(simfin_only)}"
 
@@ -76,24 +76,24 @@ def main():
     def _f(v, fmt='.3f'):
         return f"{v:{fmt}}" if pd.notna(v) else "N/A"
 
-    print(f"\n  {'='*56}")
-    print(f"  UNIVERSE A: V18 vs V18.3")
-    print(f"  {'':28s} {'V18':>12s} {'V18.3':>12s}")
-    print(f"  {'-'*56}")
-    print(f"  {'Tickers:':<28s} {V18['tickers']:>12} {m['n_tickers']:>12}")
-    print(f"  {'Dev AUC:':<28s} {V18['dev_auc']:>12.3f} {_f(m['dev_auc']):>12s}")
-    print(f"  {'Hold AUC:':<28s} {V18['hold_auc']:>12.3f} {_f(m['hold_auc']):>12s}")
-    print(f"  {'Top-25% trades:':<28s} {V18['top25_trades']:>12} {m['top25_trades']:>12}")
+    log.info(f"\n  {'='*56}")
+    log.info(f"  UNIVERSE A: V18 vs V18.3")
+    log.info(f"  {'':28s} {'V18':>12s} {'V18.3':>12s}")
+    log.info(f"  {'-'*56}")
+    log.info(f"  {'Tickers:':<28s} {V18['tickers']:>12} {m['n_tickers']:>12}")
+    log.info(f"  {'Dev AUC:':<28s} {V18['dev_auc']:>12.3f} {_f(m['dev_auc']):>12s}")
+    log.info(f"  {'Hold AUC:':<28s} {V18['hold_auc']:>12.3f} {_f(m['hold_auc']):>12s}")
+    log.info(f"  {'Top-25% trades:':<28s} {V18['top25_trades']:>12} {m['top25_trades']:>12}")
     v18_win = f"{V18['top25_win']:.0%}"
     v183_win = _f(m['top25_win'], '.0%')
     v18_pnl = f"${V18['top25_pnl']:+.2f}"
     v183_pnl = '$' + _f(m['top25_pnl'], '+.2f')
-    print(f"  {'Top-25% win rate:':<28s} {v18_win:>12s} {v183_win:>12s}")
-    print(f"  {'Top-25% P&L:':<28s} {v18_pnl:>12s} {v183_pnl:>12s}")
-    print(f"  {'='*56}")
+    log.info(f"  {'Top-25% win rate:':<28s} {v18_win:>12s} {v183_win:>12s}")
+    log.info(f"  {'Top-25% P&L:':<28s} {v18_pnl:>12s} {v183_pnl:>12s}")
+    log.info(f"  {'='*56}")
 
     # ── Benchmark gates ──
-    print(f"\n  BENCHMARK GATES:")
+    log.info(f"\n  BENCHMARK GATES:")
     gates_passed = True
 
     checks = [
@@ -104,23 +104,23 @@ def main():
 
     for name, actual, minimum in checks:
         if pd.isna(actual) or actual < minimum:
-            print(f"    FAIL: {name} = {_f(actual)} (gate: >= {minimum:.3f})")
+            log.warning(f"    FAIL: {name} = {_f(actual)} (gate: >= {minimum:.3f})")
             gates_passed = False
         else:
-            print(f"    PASS: {name} = {_f(actual)} (gate: >= {minimum:.3f})")
+            log.info(f"    PASS: {name} = {_f(actual)} (gate: >= {minimum:.3f})")
 
     # ── Save results for Stage 3 comparison ──
     with open('data/validate_results.pkl', 'wb') as f:
         pickle.dump(m, f)
-    print(f"\n  Validation results saved to data/validate_results.pkl")
+    log.info(f"\n  Validation results saved to data/validate_results.pkl")
 
     if not gates_passed:
-        print(f"\n  VALIDATION FAILED — Model job will not run")
-        print(f"  Check for: feature changes, data pipeline changes, config changes")
-        print(f"  | {elapsed()}")
+        log.warning(f"\n  VALIDATION FAILED — Model job will not run")
+        log.warning(f"  Check for: feature changes, data pipeline changes, config changes")
+        log.warning(f"  | {elapsed()}")
         sys.exit(1)
 
-    print(f"\n  Validation PASSED — Model job cleared to run | {elapsed()}")
+    log.info(f"\n  Validation PASSED — Model job cleared to run | {elapsed()}")
 
 
 if __name__ == '__main__':

@@ -15,7 +15,7 @@ from pipeline import setup_logging, teardown_logging
 _log_path, _log_file = setup_logging('data')
 
 from config import (
-    t_start, TRADING_TARGET, TRADING_HOLD, ENTRY_MODE,
+    t_start, log, TRADING_TARGET, TRADING_HOLD, ENTRY_MODE,
     UNIVERSE_A_FEATURES, UNIVERSE_B_FEATURES,
 )
 from utils import elapsed
@@ -25,12 +25,12 @@ from edgar import run_feature_qa, edgar_field_diagnostic
 
 
 def main():
-    print("=" * 70)
-    print("DROP SCORE v18.3 — STAGE 1: DATA PIPELINE")
-    print(f"  Target: {TRADING_TARGET} | Hold: {TRADING_HOLD}d | Entry: {ENTRY_MODE}")
-    print(f"  Universe A features: {UNIVERSE_A_FEATURES}")
-    print(f"  Universe B features: {UNIVERSE_B_FEATURES}")
-    print("=" * 70)
+    log.info("=" * 70)
+    log.info("DROP SCORE v18.3 — STAGE 1: DATA PIPELINE")
+    log.info(f"  Target: {TRADING_TARGET} | Hold: {TRADING_HOLD}d | Entry: {ENTRY_MODE}")
+    log.info(f"  Universe A features: {UNIVERSE_A_FEATURES}")
+    log.info(f"  Universe B features: {UNIVERSE_B_FEATURES}")
+    log.info("=" * 70)
 
     # Load all data sources (SimFin + EDGAR + prices)
     data = load_all_data()
@@ -53,19 +53,19 @@ def main():
     sp_in_dev = sp_tickers & all_dev_tickers
     price_tickers = set(data['price_dict'].keys()) - {'SPY', '^VIX'}
 
-    print(f"\n  {'='*50}")
-    print(f"  DATA COVERAGE")
-    print(f"    SimFin universe:      {len(simfin_universe)} tickers")
-    print(f"    EDGAR tickers:        {len(edgar_tickers)} tickers "
+    log.info(f"\n  {'='*50}")
+    log.info(f"  DATA COVERAGE")
+    log.info(f"    SimFin universe:      {len(simfin_universe)} tickers")
+    log.info(f"    EDGAR tickers:        {len(edgar_tickers)} tickers "
           f"({len(edgar_tickers - simfin_universe)} new)")
-    print(f"    Combined dev set:     {all_dev_tickers.__len__()} tickers, "
+    log.info(f"    Combined dev set:     {all_dev_tickers.__len__()} tickers, "
           f"{len(data['df_dev']):,} rows")
-    print(f"    Holdout set:          {len(data['df_hold']):,} rows")
-    print(f"    S&P in dev:           {len(sp_in_dev)}/{len(sp_tickers)}")
-    print(f"    Price dict:           {len(price_tickers)} tickers")
-    print(f"    Features:             {len(data['fcols_q'])} columns")
-    print(f"    Targets:              {len(data.get('tcols', []))} targets")
-    print(f"  {'='*50}\n")
+    log.info(f"    Holdout set:          {len(data['df_hold']):,} rows")
+    log.info(f"    S&P in dev:           {len(sp_in_dev)}/{len(sp_tickers)}")
+    log.info(f"    Price dict:           {len(price_tickers)} tickers")
+    log.info(f"    Features:             {len(data['fcols_q'])} columns")
+    log.info(f"    Targets:              {len(data.get('tcols', []))} targets")
+    log.info(f"  {'='*50}\n")
 
     # Save portable bundle (strip cache/file refs not needed downstream)
     strip_keys = {
@@ -81,7 +81,7 @@ def main():
     with open(bundle_path, 'wb') as f:
         pickle.dump(portable, f, protocol=pickle.HIGHEST_PROTOCOL)
     size_mb = os.path.getsize(bundle_path) / 1e6
-    print(f"  Data bundle saved: {bundle_path} ({size_mb:.0f} MB)")
+    log.info(f"  Data bundle saved: {bundle_path} ({size_mb:.0f} MB)")
 
     # Assertions — fail fast if coverage is broken
     assert len(simfin_universe) > 900, \
@@ -93,7 +93,7 @@ def main():
     assert len(data['df_dev']) > 10000, \
         f"Dev set too small: {len(data['df_dev'])}"
 
-    print(f"  Data pipeline complete | {elapsed()}")
+    log.info(f"  Data pipeline complete | {elapsed()}")
 
 
 if __name__ == '__main__':

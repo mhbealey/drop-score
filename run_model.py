@@ -18,7 +18,7 @@ from pipeline import (
 _log_path, _log_file = setup_logging('model')
 
 from config import (
-    t_start, N_BOOT, VOL_FLOOR,
+    t_start, log, N_BOOT, VOL_FLOOR,
     TRADING_TARGET, TRADING_HOLD, ENTRY_MODE,
     BORROW_RATE_EASY, BORROW_RATE_HARD,
     UNIVERSE_A_FEATURES, UNIVERSE_B_FEATURES,
@@ -44,27 +44,27 @@ V18_B = {
 
 
 def main():
-    print("=" * 70)
-    print("DROP SCORE v18.3 — STAGE 3: MODEL (Universe B: S&P 400+600)")
-    print(f"  Target: {TRADING_TARGET} (LOCKED)")
-    print(f"  Features: {UNIVERSE_B_FEATURES} (LOCKED)")
-    print(f"  Hold: {TRADING_HOLD}d | Entry: {ENTRY_MODE}")
-    print(f"  Borrow: {BORROW_RATE_EASY:.0%}/{BORROW_RATE_HARD:.0%}")
-    print("=" * 70)
+    log.info("=" * 70)
+    log.info("DROP SCORE v18.3 — STAGE 3: MODEL (Universe B: S&P 400+600)")
+    log.info(f"  Target: {TRADING_TARGET} (LOCKED)")
+    log.info(f"  Features: {UNIVERSE_B_FEATURES} (LOCKED)")
+    log.info(f"  Hold: {TRADING_HOLD}d | Entry: {ENTRY_MODE}")
+    log.info(f"  Borrow: {BORROW_RATE_EASY:.0%}/{BORROW_RATE_HARD:.0%}")
+    log.info("=" * 70)
 
     # Load data bundle from Stage 1
     with open('data/data_bundle.pkl', 'rb') as f:
         data = pickle.load(f)
-    print(f"  Loaded data bundle")
+    log.info(f"  Loaded data bundle")
 
     # Load Universe A results from Stage 2
     universe_a = {}
     try:
         with open('data/validate_results.pkl', 'rb') as f:
             universe_a = pickle.load(f)
-        print(f"  Loaded Universe A results: Dev AUC={universe_a.get('dev_auc', 'N/A')}")
+        log.info(f"  Loaded Universe A results: Dev AUC={universe_a.get('dev_auc', 'N/A')}")
     except FileNotFoundError:
-        print(f"  WARNING: No validate_results.pkl — Universe A comparison unavailable")
+        log.warning(f"  WARNING: No validate_results.pkl — Universe A comparison unavailable")
 
     # Universe B: S&P 400+600 tickers
     sp_tickers = get_sp_index_tickers()
@@ -72,12 +72,12 @@ def main():
     sp_overlap = sp_tickers & all_tickers
     price_overlap = sp_tickers & set(data['price_dict'].keys())
 
-    print(f"  S&P index: {len(sp_tickers)} tickers")
-    print(f"  Overlap with feature data: {len(sp_overlap)}/{len(sp_tickers)}")
-    print(f"  Overlap with price cache: {len(price_overlap)}/{len(sp_tickers)}")
+    log.info(f"  S&P index: {len(sp_tickers)} tickers")
+    log.info(f"  Overlap with feature data: {len(sp_overlap)}/{len(sp_tickers)}")
+    log.info(f"  Overlap with price cache: {len(price_overlap)}/{len(sp_tickers)}")
 
     if len(sp_overlap) < 200:
-        print(f"  WARNING: low overlap ({len(sp_overlap)} tickers)")
+        log.warning(f"  WARNING: low overlap ({len(sp_overlap)} tickers)")
 
     # Run pipeline with locked features
     result = run_pipeline(
@@ -96,7 +96,7 @@ def main():
     # Bayesian optimization (on Universe B)
     # ═══════════════════════════════════════════════════════════════
     elapsed_min = (time.time() - t_start) / 60
-    print(f"\n  Time check: {elapsed_min:.0f} min elapsed")
+    log.info(f"\n  Time check: {elapsed_min:.0f} min elapsed")
 
     if elapsed_min < 60:
         baseline_auc = result.get('v_results', {}).get(
@@ -108,9 +108,9 @@ def main():
         if optuna_bp and optuna_study:
             opt_val = optuna_study.best_value
             if opt_val - baseline_auc > 0.01:
-                print(f"  Optuna improved AUC by {opt_val - baseline_auc:+.3f}")
+                log.info(f"  Optuna improved AUC by {opt_val - baseline_auc:+.3f}")
             else:
-                print(f"  Optuna improvement marginal ({opt_val - baseline_auc:+.3f})")
+                log.info(f"  Optuna improvement marginal ({opt_val - baseline_auc:+.3f})")
                 result.pop('optuna_best_params', None)
 
         # Bootstrap CIs on walk-forward top 25%
@@ -118,16 +118,16 @@ def main():
         boot = run_bootstrap_ci(wf_top, n_boot=1000)
         result['bootstrap_ci'] = boot
     else:
-        print(f"  TIME BUDGET: >{60} min, skipping Bayesian optimization")
+        log.info(f"  TIME BUDGET: >{60} min, skipping Bayesian optimization")
 
     # ═══════════════════════════════════════════════════════════════
     # A/B COMPARISON: Default vs Bayesian params (informational only)
     # ═══════════════════════════════════════════════════════════════
     optuna_bp = result.get('optuna_best_params')
     if optuna_bp and len(result.get('wf_df', pd.DataFrame())) >= 10:
-        print(f"\n{'='*70}")
-        print(f"A/B COMPARISON: Default vs Bayesian XGB params")
-        print(f"{'='*70}")
+        log.info(f"\n{'='*70}")
+        log.info(f"A/B COMPARISON: Default vs Bayesian XGB params")
+        log.info(f"{'='*70}")
 
         # Extract Bayesian XGB params
         bayesian_xgb = {}
@@ -144,8 +144,8 @@ def main():
             if optuna_key in optuna_bp:
                 bayesian_xgb[xgb_key] = optuna_bp[optuna_key]
 
-        print(f"  Default:  depth=5, lr=0.05, n_est=200, sub=0.8, col=0.8")
-        print(f"  Bayesian: depth={bayesian_xgb.get('max_depth', '?')}, "
+        log.info(f"  Default:  depth=5, lr=0.05, n_est=200, sub=0.8, col=0.8")
+        log.info(f"  Bayesian: depth={bayesian_xgb.get('max_depth', '?')}, "
               f"lr={bayesian_xgb.get('learning_rate', '?'):.3f}, "
               f"n_est={bayesian_xgb.get('n_estimators', '?')}, "
               f"sub={bayesian_xgb.get('subsample', '?'):.2f}, "
@@ -158,10 +158,10 @@ def main():
             from walkforward import _tier_stats
             tiers_a = _tier_stats(wf_df_a)
 
-        print(f"\n  {'':10s} {'':6s} {'── Default ──':>28s}  {'── Bayesian ──':>28s}")
-        print(f"  {'Tier':<10s} {'':6s} {'n':>4s} {'Win':>5s} {'$/sh':>7s} {'Stops':>6s}"
+        log.info(f"\n  {'':10s} {'':6s} {'── Default ──':>28s}  {'── Bayesian ──':>28s}")
+        log.info(f"  {'Tier':<10s} {'':6s} {'n':>4s} {'Win':>5s} {'$/sh':>7s} {'Stops':>6s}"
               f"  {'n':>4s} {'Win':>5s} {'$/sh':>7s} {'Stops':>6s}")
-        print(f"  {'-'*72}")
+        log.info(f"  {'-'*72}")
         for tier_name in ['Top 10%', 'Top 25%', 'Top 50%', 'Full']:
             ta = tiers_a.get(tier_name, {})
             tb = tiers_b.get(tier_name, {})
@@ -174,22 +174,22 @@ def main():
                      f"${ta.get('avg_pnl', 0):>+6.2f} {_tv(ta, 'stop_rate'):>6s}")
             b_str = (f"{tb.get('n', 0):>4} {_tv(tb, 'win'):>5s} "
                      f"${tb.get('avg_pnl', 0):>+6.2f} {_tv(tb, 'stop_rate'):>6s}")
-            print(f"  {tier_name:<10s} {'':6s} {a_str}  {b_str}")
-        print(f"  NOTE: Informational only — no config changes made")
+            log.info(f"  {tier_name:<10s} {'':6s} {a_str}  {b_str}")
+        log.info(f"  NOTE: Informational only — no config changes made")
     else:
-        print(f"\n  A/B comparison skipped (no Bayesian params or too few trades)")
+        log.info(f"\n  A/B comparison skipped (no Bayesian params or too few trades)")
 
     # ═══════════════════════════════════════════════════════════════
     # CONVICTION SWEEP: Score percentile thresholds (informational)
     # ═══════════════════════════════════════════════════════════════
     wf_df_sweep = result.get('wf_df', pd.DataFrame())
     if len(wf_df_sweep) >= 20:
-        print(f"\n{'='*70}")
-        print(f"CONVICTION SWEEP: Score percentile thresholds")
-        print(f"{'='*70}")
-        print(f"  {'Threshold':<12s} {'n':>5s} {'Win':>6s} {'Avg$/sh':>9s} "
+        log.info(f"\n{'='*70}")
+        log.info(f"CONVICTION SWEEP: Score percentile thresholds")
+        log.info(f"{'='*70}")
+        log.info(f"  {'Threshold':<12s} {'n':>5s} {'Win':>6s} {'Avg$/sh':>9s} "
               f"{'Med$/sh':>9s} {'Stops':>6s} {'Tr/Q':>5s} {'ProfQ':>6s}")
-        print(f"  {'-'*60}")
+        log.info(f"  {'-'*60}")
 
         nq = wf_df_sweep['quarter'].nunique()
         for label, pct in [('Top 10%', 0.90), ('Top 15%', 0.85), ('Top 20%', 0.80),
@@ -206,9 +206,9 @@ def main():
             tpq = len(sub) / nq if nq > 0 else 0
             q_pnl = sub.groupby('quarter')['pnl_per_share'].sum()
             prof_q = f"{(q_pnl > 0).sum()}/{len(q_pnl)}"
-            print(f"  {label:<12s} {len(sub):>5} {win:>5.0%} ${avg:>+8.2f} "
+            log.info(f"  {label:<12s} {len(sub):>5} {win:>5.0%} ${avg:>+8.2f} "
                   f"${med:>+8.2f} {sr:>5.0%} {tpq:>5.1f} {prof_q:>6s}")
-        print(f"  NOTE: Informational only — no config changes made")
+        log.info(f"  NOTE: Informational only — no config changes made")
 
     # ═══════════════════════════════════════════════════════════════
     # HEAD-TO-HEAD COMPARISON
@@ -218,39 +218,39 @@ def main():
 
     m_a = universe_a  # from Stage 2
 
-    print(f"\n{'='*70}")
-    print(f"V18 vs V18.3 COMPARISON")
-    print(f"{'='*70}")
-    print(f"\n  {'':30s} {'V18':>12s} {'V18.3':>12s}")
-    print(f"  {'-'*56}")
+    log.info(f"\n{'='*70}")
+    log.info(f"V18 vs V18.3 COMPARISON")
+    log.info(f"{'='*70}")
+    log.info(f"\n  {'':30s} {'V18':>12s} {'V18.3':>12s}")
+    log.info(f"  {'-'*56}")
 
     if m_a:
-        print(f"  {'Universe A tickers:':<30s} {V18_A['tickers']:>12} "
+        log.info(f"  {'Universe A tickers:':<30s} {V18_A['tickers']:>12} "
               f"{m_a.get('n_tickers', 'N/A'):>12}")
-        print(f"  {'Universe A Dev AUC:':<30s} {V18_A['dev_auc']:>12.3f} "
+        log.info(f"  {'Universe A Dev AUC:':<30s} {V18_A['dev_auc']:>12.3f} "
               f"{_f(m_a.get('dev_auc')):>12s}")
-        print(f"  {'Universe A Hold AUC:':<30s} {V18_A['hold_auc']:>12.3f} "
+        log.info(f"  {'Universe A Hold AUC:':<30s} {V18_A['hold_auc']:>12.3f} "
               f"{_f(m_a.get('hold_auc')):>12s}")
         t25w_a = m_a.get('top25_win')
         t25p_a = m_a.get('top25_pnl')
         if pd.notna(t25w_a) and pd.notna(t25p_a):
-            print(f"  {'Universe A Top-25%:':<30s} {'71%/$+1.98':>12s} "
+            log.info(f"  {'Universe A Top-25%:':<30s} {'71%/$+1.98':>12s} "
                   f"{t25w_a:.0%}/${t25p_a:+.2f}".rjust(12))
 
-    print(f"  {'Universe B tickers:':<30s} {V18_B['tickers']:>12} "
+    log.info(f"  {'Universe B tickers:':<30s} {V18_B['tickers']:>12} "
           f"{m_b['n_tickers']:>12}")
-    print(f"  {'Universe B Dev AUC:':<30s} {V18_B['dev_auc']:>12.3f} "
+    log.info(f"  {'Universe B Dev AUC:':<30s} {V18_B['dev_auc']:>12.3f} "
           f"{_f(m_b['dev_auc']):>12s}")
-    print(f"  {'Universe B Hold AUC:':<30s} {V18_B['hold_auc']:>12.3f} "
+    log.info(f"  {'Universe B Hold AUC:':<30s} {V18_B['hold_auc']:>12.3f} "
           f"{_f(m_b['hold_auc']):>12s}")
 
     if pd.notna(m_b.get('top10_win')) and pd.notna(m_b.get('top10_pnl')):
-        print(f"  {'Universe B Top-10%:':<30s} {'86%/$+3.06':>12s} "
+        log.info(f"  {'Universe B Top-10%:':<30s} {'86%/$+3.06':>12s} "
               f"{m_b['top10_win']:.0%}/${m_b['top10_pnl']:+.2f}".rjust(12))
     if pd.notna(m_b.get('top25_win')) and pd.notna(m_b.get('top25_pnl')):
-        print(f"  {'Universe B Top-25%:':<30s} {'69%/$+1.14':>12s} "
+        log.info(f"  {'Universe B Top-25%:':<30s} {'69%/$+1.14':>12s} "
               f"{m_b['top25_win']:.0%}/${m_b['top25_pnl']:+.2f}".rjust(12))
-    print(f"  {'-'*56}")
+    log.info(f"  {'-'*56}")
 
     # ═══════════════════════════════════════════════════════════════
     # FULL RESULTS SUMMARY
@@ -268,41 +268,41 @@ def main():
     bva = max(va_tgts, key=lambda k: v_results[k]['mauc']) if va_tgts else None
     va_auc = v_results[bva]['mauc'] if bva else 0
 
-    print(f"\n{'='*70}")
-    print(f"  DROP SCORE v18.3 — FULL RESULTS (Universe B)")
-    print(f"{'='*70}")
-    print(f"  DATA: {m_b['n_tickers']} stocks | "
+    log.info(f"\n{'='*70}")
+    log.info(f"  DROP SCORE v18.3 — FULL RESULTS (Universe B)")
+    log.info(f"{'='*70}")
+    log.info(f"  DATA: {m_b['n_tickers']} stocks | "
           f"{len(result['df_dev']):,} dev + {len(result['df_hold']):,} hold")
-    print(f"  VULN: {best_v_t} Dev={ba:.3f}")
-    print(f"  TRADING: {TRADING_TARGET} Hold={m_b['hold_auc']:.3f}")
-    print(f"  Features: {topf_v}")
-    print(f"  VOL-ADJUSTED: {bva or 'N/A'} AUC={va_auc:.3f}")
+    log.info(f"  VULN: {best_v_t} Dev={ba:.3f}")
+    log.info(f"  TRADING: {TRADING_TARGET} Hold={m_b['hold_auc']:.3f}")
+    log.info(f"  Features: {topf_v}")
+    log.info(f"  VOL-ADJUSTED: {bva or 'N/A'} AUC={va_auc:.3f}")
 
     if len(wf_df) > 0:
         total_borrow = wf_df['borrow_cost'].sum() if 'borrow_cost' in wf_df.columns else 0
         avg_borrow = wf_df['borrow_cost'].mean() if 'borrow_cost' in wf_df.columns else 0
-        print(f"\n  WALK-FORWARD: {len(wf_df)} trades "
+        log.info(f"\n  WALK-FORWARD: {len(wf_df)} trades "
               f"({ENTRY_MODE} entry, {TRADING_HOLD}d hold, vol floor {VOL_FLOOR:,})")
-        print(f"    Full:    win={(wf_df['pnl_per_share']>0).mean():.0%} "
+        log.info(f"    Full:    win={(wf_df['pnl_per_share']>0).mean():.0%} "
               f"avg=${wf_df['pnl_per_share'].mean():+.2f}/sh "
               f"stops={wf_df['stopped'].mean():.0%}")
         if len(wf_top) > 0:
-            print(f"    Top 25%: win={(wf_top['pnl_per_share']>0).mean():.0%} "
+            log.info(f"    Top 25%: win={(wf_top['pnl_per_share']>0).mean():.0%} "
                   f"avg=${wf_top['pnl_per_share'].mean():+.2f}/sh "
                   f"stops={wf_top['stopped'].mean():.0%}")
-        print(f"    Borrow: avg ${avg_borrow:.2f}/sh total ${total_borrow:,.0f}")
+        log.info(f"    Borrow: avg ${avg_borrow:.2f}/sh total ${total_borrow:,.0f}")
 
     for lbl, r in eq_results.items():
-        print(f"  {lbl}: ${r['start']:,}->${r['end']:,.0f} ({r['ret']:+.0%}) "
+        log.info(f"  {lbl}: ${r['start']:,}->${r['end']:,.0f} ({r['ret']:+.0%}) "
               f"DD={r['max_dd_pct']:.0%} Calmar={r['calmar']:.2f}")
 
     # Top 20 trades
     if len(wf_top) > 0:
-        print(f"\n  FIRST 20 TRADES (top-25% conviction):")
+        log.info(f"\n  FIRST 20 TRADES (top-25% conviction):")
         for i, (_, r) in enumerate(wf_top.sort_values('entry_date').head(20).iterrows()):
             ex = 'STOP' if r['stopped'] else 'PT' if r['profit_taken'] else 'EXP'
             borr = f" borrow=${r['borrow_cost']:.2f}" if 'borrow_cost' in r.index else ""
-            print(f"    {r['ticker']:<6} {str(r['entry_date'])[:10]} "
+            log.info(f"    {r['ticker']:<6} {str(r['entry_date'])[:10]} "
                   f"${r['entry_price']:>6.0f}->${r['exit_price']:>6.0f} {ex:<4} "
                   f"${r['pnl_per_share']:+.2f}/sh ({r['pnl_pct']*100:+.1f}%){borr}")
 
@@ -333,13 +333,13 @@ def main():
     else:
         checks["WF includes EDGAR trades"] = False
 
-    print(f"\n{'='*70}")
-    print(f"QA CHECKLIST")
-    print(f"{'='*70}")
+    log.info(f"\n{'='*70}")
+    log.info(f"QA CHECKLIST")
+    log.info(f"{'='*70}")
     for check, passed in checks.items():
         icon = 'PASS' if passed else 'FAIL'
-        print(f"  [{icon}] {check}")
-    print(f"{'='*70}")
+        log.info(f"  [{icon}] {check}")
+    log.info(f"{'='*70}")
 
     # Save full results
     cache_dir = data.get('cache_dir', 'data/')
@@ -362,8 +362,8 @@ def main():
             },
         }, f)
 
-    print(f"\nTotal: {(time.time()-t_start)/60:.1f} min")
-    print("Drop Score v18.3 complete.")
+    log.info(f"\nTotal: {(time.time()-t_start)/60:.1f} min")
+    log.info("Drop Score v18.3 complete.")
 
 
 if __name__ == '__main__':

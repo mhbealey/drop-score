@@ -4,10 +4,39 @@ Drop Score Configuration
 All model parameters, thresholds, feature definitions, and XBRL mappings.
 Change settings here, not in individual modules.
 """
+import logging
 import os
+import sys
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Set
+
+
+# ── Logging ─────────────────────────────────────────────────
+# Dynamic stdout handler: always writes to current sys.stdout,
+# which works correctly with the Tee redirect in pipeline.py.
+class _DynamicStdoutHandler(logging.StreamHandler):
+    """Handler that always references the *current* sys.stdout."""
+    def emit(self, record: logging.LogRecord) -> None:
+        self.stream = sys.stdout
+        super().emit(record)
+
+
+def setup_dropscore_logging(level: int = logging.INFO) -> logging.Logger:
+    """Configure and return the 'dropscore' logger.
+
+    Uses '%(message)s' format so output is identical to print().
+    """
+    logger = logging.getLogger('dropscore')
+    if not logger.handlers:
+        handler = _DynamicStdoutHandler()
+        handler.setFormatter(logging.Formatter('%(message)s'))
+        logger.addHandler(handler)
+    logger.setLevel(level)
+    return logger
+
+
+log = setup_dropscore_logging()
 
 
 # ── Version ──────────────────────────────────────────────

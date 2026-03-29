@@ -13,7 +13,7 @@ import xgboost as xgb
 from tqdm import tqdm
 
 from config import (
-    VOL_FLOOR, SECTOR_CAP, REGIME_SPY_MAX, REGIME_VIX_MIN,
+    log, VOL_FLOOR, SECTOR_CAP, REGIME_SPY_MAX, REGIME_VIX_MIN,
     SLIPPAGE, STOP_LOSS, PROFIT_TARGET, TRAILING_STOP,
     SKIP_RET5D_DOWN, SKIP_VOL_PCT, ENTRY_DELAY,
     TRADING_TARGET, TRADING_HOLD, ENTRY_MODE,
@@ -276,9 +276,9 @@ def _tier_stats(wf_df: pd.DataFrame) -> Dict[str, dict]:
 def run_walkforward(data_bundle: dict) -> dict:
     """Run walk-forward locked to TRADING_TARGET / TRADING_HOLD / ENTRY_MODE."""
     t0 = time.time()
-    print("=" * 70)
-    print(f"WALK-FORWARD: {TRADING_TARGET} / {TRADING_HOLD}d hold / {ENTRY_MODE} entry")
-    print("=" * 70)
+    log.info("=" * 70)
+    log.info(f"WALK-FORWARD: {TRADING_TARGET} / {TRADING_HOLD}d hold / {ENTRY_MODE} entry")
+    log.info("=" * 70)
 
     v_results = data_bundle['v_results']
     price_dict = data_bundle['price_dict']
@@ -288,15 +288,15 @@ def run_walkforward(data_bundle: dict) -> dict:
     if wf_tgt not in v_results:
         # Fallback: use whatever target Pareto selected for this universe
         best_fallback = max(v_results, key=lambda k: v_results[k]['mauc'])
-        print(f"\n  {wf_tgt} not in trained targets, using best: {best_fallback}")
+        log.info(f"\n  {wf_tgt} not in trained targets, using best: {best_fallback}")
         wf_tgt = best_fallback
 
     auc = v_results[wf_tgt]['mauc']
     use_conf = (ENTRY_MODE == "confirmed")
-    print(f"\n  Target: {wf_tgt} (AUC={auc:.3f})")
-    print(f"  Hold: {TRADING_HOLD}d | Entry: {ENTRY_MODE}"
+    log.info(f"\n  Target: {wf_tgt} (AUC={auc:.3f})")
+    log.info(f"  Hold: {TRADING_HOLD}d | Entry: {ENTRY_MODE}"
           f"{f' ({CONFIRMATION_DROP:.0%} in {CONFIRMATION_WINDOW}d)' if use_conf else ''}")
-    print(f"  Borrow: {BORROW_RATE_EASY:.0%} (easy, vol>=1M) / "
+    log.info(f"  Borrow: {BORROW_RATE_EASY:.0%} (easy, vol>=1M) / "
           f"{BORROW_RATE_HARD:.0%} (hard, vol<1M)")
 
     # Train models once
@@ -311,7 +311,7 @@ def run_walkforward(data_bundle: dict) -> dict:
     wf_df = pd.DataFrame(trades) if trades else pd.DataFrame()
 
     if len(wf_df) < 10:
-        print(f"\n  Only {len(wf_df)} trades — too few for analysis")
+        log.info(f"\n  Only {len(wf_df)} trades — too few for analysis")
         data_bundle.update(
             all_wf_trades=trades, wf_df=wf_df,
             wf_top=wf_df.copy(), wf_comparison=[],
@@ -320,13 +320,13 @@ def run_walkforward(data_bundle: dict) -> dict:
 
     # Tier analysis
     tiers = _tier_stats(wf_df)
-    print(f"\n  {'Tier':<10} {'n':>4} {'Win':>5} {'Raw$/sh':>9} {'Borw$/sh':>9} "
+    log.info(f"\n  {'Tier':<10} {'n':>4} {'Win':>5} {'Raw$/sh':>9} {'Borw$/sh':>9} "
           f"{'Net$/sh':>9} {'Net%':>7} {'Stops':>6}")
-    print(f"  {'-'*60}")
+    log.info(f"  {'-'*60}")
     for name in ['Top 10%', 'Top 25%', 'Top 50%', 'Full']:
         t = tiers.get(name)
         if t:
-            print(f"  {t['tier']:<10} {t['n']:>4} {t['win']:>5.0%} "
+            log.info(f"  {t['tier']:<10} {t['n']:>4} {t['win']:>5.0%} "
                   f"${t['avg_raw']:>+7.2f} ${t['avg_borrow']:>7.2f} "
                   f"${t['avg_pnl']:>+7.2f} {t['avg_pct']:>+6.1f}% "
                   f"{t['stop_rate']:>5.0%}")
@@ -340,13 +340,13 @@ def run_walkforward(data_bundle: dict) -> dict:
 
     # Per-quarter breakdown
     if len(wf_top) > 0:
-        print(f"\n  TOP 25% BY QUARTER ({len(wf_top)} trades):")
+        log.info(f"\n  TOP 25% BY QUARTER ({len(wf_top)} trades):")
         for q in sorted(wf_top['quarter'].unique()):
             qs = wf_top[wf_top['quarter'] == q]
             if len(qs) >= 2:
                 raw_avg = qs['pnl_raw'].mean() if 'pnl_raw' in qs.columns else qs['pnl_per_share'].mean()
                 borr_avg = qs['borrow_cost'].mean() if 'borrow_cost' in qs.columns else 0
-                print(f"    {q}: n={len(qs):>3} win={(qs['pnl_per_share']>0).mean():.0%} "
+                log.info(f"    {q}: n={len(qs):>3} win={(qs['pnl_per_share']>0).mean():.0%} "
                       f"raw=${raw_avg:+.2f} borrow=${borr_avg:.2f} "
                       f"net=${qs['pnl_per_share'].mean():+.2f}/sh")
 
@@ -354,10 +354,10 @@ def run_walkforward(data_bundle: dict) -> dict:
     q_pnl = wf_top.groupby('quarter')['pnl_per_share'].sum()
     prof_q = (q_pnl > 0).sum()
     total_q = len(q_pnl)
-    print(f"\n  Profitable quarters: {prof_q}/{total_q}")
-    print(f"  Trades: {len(wf_df)} total, {len(wf_top)} top-25%")
-    print(f"  [{time.time()-t0:.0f}s] {elapsed()}")
-    print()
+    log.info(f"\n  Profitable quarters: {prof_q}/{total_q}")
+    log.info(f"  Trades: {len(wf_df)} total, {len(wf_top)} top-25%")
+    log.info(f"  [{time.time()-t0:.0f}s] {elapsed()}")
+    log.info()
 
     # Build comparison row for main.py head-to-head
     t25 = tiers.get('Top 25%', {})
@@ -410,5 +410,5 @@ def run_walkforward_ab(data_bundle: dict, xgb_override: dict,
     wf_df = pd.DataFrame(trades) if trades else pd.DataFrame()
     tiers = _tier_stats(wf_df) if len(wf_df) >= 20 else {}
 
-    print(f"  [{label}] {len(wf_df)} trades, {time.time()-t0:.0f}s")
+    log.info(f"  [{label}] {len(wf_df)} trades, {time.time()-t0:.0f}s")
     return wf_df, tiers

@@ -11,7 +11,7 @@ import yfinance as yf
 import matplotlib.pyplot as plt
 
 from config import (
-    SLIPPAGE, STOP_LOSS, VOL_FLOOR,
+    SLIPPAGE, STOP_LOSS, VOL_FLOOR, log,
 )
 from utils import elapsed, to_scalar, ensure_series
 
@@ -176,9 +176,9 @@ def run_equity_sim(trades_df: pd.DataFrame, start_bal: int, pos_size: int,
 def run_equity_scenarios(data_bundle: dict) -> dict:
     """Run all equity scenarios, ramp-up, diagnostics, and plots."""
     t0 = time.time()
-    print("=" * 70)
-    print("EQUITY CURVES + DYNAMIC REGIME")
-    print("=" * 70)
+    log.info("=" * 70)
+    log.info("EQUITY CURVES + DYNAMIC REGIME")
+    log.info("=" * 70)
 
     wf_top = data_bundle['wf_top']
     wf_df = data_bundle['wf_df']
@@ -189,7 +189,7 @@ def run_equity_scenarios(data_bundle: dict) -> dict:
 
     # Dynamic regime diagnostic: when would each threshold have fired?
     if spy_close is not None and len(wf_top) > 0:
-        print("  REGIME DIAGNOSTIC (when would triggers fire?):")
+        log.info("  REGIME DIAGNOSTIC (when would triggers fire?):")
         bad_qs = [
             q for q in wf_top['quarter'].unique()
             if wf_top[wf_top['quarter'] == q]['pnl_per_share'].mean() < -0.5
@@ -204,16 +204,16 @@ def run_equity_scenarios(data_bundle: dict) -> dict:
                                / to_scalar(spy_q.iloc[i - 10]))
                         if r10 > thr_pct:
                             day_num = i
-                            print(f"    {q} @ {thr_pct:.0%}: triggers day {day_num} "
+                            log.info(f"    {q} @ {thr_pct:.0%}: triggers day {day_num} "
                                   f"({spy_q.index[i].date()})")
                             break
                     else:
-                        print(f"    {q} @ {thr_pct:.0%}: never triggers")
+                        log.info(f"    {q} @ {thr_pct:.0%}: never triggers")
             except Exception:
                 pass
 
     # Run 3 account scenarios x medium regime check
-    print(f"\n  ACCOUNT SCENARIOS (top-25% trades, +4% regime check):")
+    log.info(f"\n  ACCOUNT SCENARIOS (top-25% trades, +4% regime check):")
     scenarios = [
         ('Conservative', 10000, 2000, 3),
         ('Moderate',     25000, 5000, 5),
@@ -227,12 +227,12 @@ def run_equity_scenarios(data_bundle: dict) -> dict:
                            price_dict=price_dict)
         if r:
             eq_results[lbl] = r
-            print(f"    {lbl:<14} ${bal:>6,}\u2192${r['end']:>8,.0f} ({r['ret']:+.0%}) "
+            log.info(f"    {lbl:<14} ${bal:>6,}\u2192${r['end']:>8,.0f} ({r['ret']:+.0%}) "
                   f"DD=${r['max_dd']:>7,.0f} ({r['max_dd_pct']:.0%}) "
                   f"Cal={r['calmar']:.2f} trades={r['trades']}")
 
     # Ramp-up scenario
-    print(f"\n  RAMP-UP ($5K start, scale 25% after profitable Q):")
+    log.info(f"\n  RAMP-UP ($5K start, scale 25% after profitable Q):")
     if len(wf_top) > 10:
         ws_ramp = wf_top.sort_values('entry_date').reset_index(drop=True)
         ramp_bal = 5000
@@ -270,11 +270,11 @@ def run_equity_scenarios(data_bundle: dict) -> dict:
             # Hold flat after loss (don't decrease)
         ramp_df = pd.DataFrame(ramp_eq)
         if len(ramp_df) > 0:
-            print(f"    Start: $5,000 | End: ${ramp_bal:,.0f} ({(ramp_bal-5000)/5000:+.0%})")
-            print(f"    Position size: $1,000 \u2192 ${ramp_ps:,}")
-            print(f"    Trades: {ramp_trades}")
+            log.info(f"    Start: $5,000 | End: ${ramp_bal:,.0f} ({(ramp_bal-5000)/5000:+.0%})")
+            log.info(f"    Position size: $1,000 \u2192 ${ramp_ps:,}")
+            log.info(f"    Trades: {ramp_trades}")
             for _, r in ramp_df.iterrows():
-                print(f"      {r['quarter']}: ${r['balance']:>8,.0f} "
+                log.info(f"      {r['quarter']}: ${r['balance']:>8,.0f} "
                       f"(Q P&L ${r['q_pnl']:+,.0f}, size ${r['ps']:,})")
 
     # Best scenario equity curve plot
@@ -296,8 +296,8 @@ def run_equity_scenarios(data_bundle: dict) -> dict:
             pass
         plt.show()
 
-    print(f"  [{time.time()-t0:.0f}s] {elapsed()}")
-    print()
+    log.info(f"  [{time.time()-t0:.0f}s] {elapsed()}")
+    log.info()
 
     data_bundle['eq_results'] = eq_results
     data_bundle['best_sc'] = best_sc
@@ -310,9 +310,9 @@ def run_equity_scenarios(data_bundle: dict) -> dict:
 def _run_diagnostics(data_bundle, wf_top, all_wf_trades, best_sc, spy_close, price_dict):
     """Post-equity diagnostics: tech-only, staged entry, SPY corr, earnings proximity."""
     t0 = time.time()
-    print("=" * 70)
-    print("DIAGNOSTICS")
-    print("=" * 70)
+    log.info("=" * 70)
+    log.info("DIAGNOSTICS")
+    log.info("=" * 70)
 
     if len(wf_top) > 10 and 'sector' in wf_top.columns:
         tech = wf_top[wf_top['sector'] == 'Technology']
@@ -322,7 +322,7 @@ def _run_diagnostics(data_bundle, wf_top, all_wf_trades, best_sc, spy_close, pri
                                     spy_close=spy_close,
                                     price_dict=price_dict)
             if r_tech:
-                print(f"\n  TECH-ONLY: {len(tech)} trades \u2192 "
+                log.info(f"\n  TECH-ONLY: {len(tech)} trades \u2192 "
                       f"${r_tech['end']:,.0f} ({r_tech['ret']:+.0%}) "
                       f"DD={r_tech['max_dd_pct']:.0%} Cal={r_tech['calmar']:.2f}")
 
@@ -331,15 +331,15 @@ def _run_diagnostics(data_bundle, wf_top, all_wf_trades, best_sc, spy_close, pri
     try:
         _earnings_proximity_diagnostic(data_bundle, wf_top)
     except (KeyError, Exception) as e:
-        print(f"\n  EARNINGS PROXIMITY: skipped ({e})")
+        log.info(f"\n  EARNINGS PROXIMITY: skipped ({e})")
 
-    print(f"  [{time.time()-t0:.0f}s] {elapsed()}")
-    print()
+    log.info(f"  [{time.time()-t0:.0f}s] {elapsed()}")
+    log.info()
 
 
 def _staged_entry_diagnostic(all_wf_trades, price_dict):
     """Compare immediate vs confirmed entry P&L."""
-    print(f"\n  STAGED ENTRY (enter after 2% drop in 5d):")
+    log.info(f"\n  STAGED ENTRY (enter after 2% drop in 5d):")
     if len(all_wf_trades) <= 20:
         return
     immediate_pnl = []
@@ -370,8 +370,8 @@ def _staged_entry_diagnostic(all_wf_trades, price_dict):
     if confirmed_count >= 10:
         ia = np.array(immediate_pnl)
         ca = np.array(confirmed_pnl)
-        print(f"    Immediate: n={len(ia)} win={(ia>0).mean():.0%} avg=${ia.mean():+.2f}/sh")
-        print(f"    Confirmed: n={len(ca)} win={(ca>0).mean():.0%} avg=${ca.mean():+.2f}/sh (missed {missed})")
+        log.info(f"    Immediate: n={len(ia)} win={(ia>0).mean():.0%} avg=${ia.mean():+.2f}/sh")
+        log.info(f"    Confirmed: n={len(ca)} win={(ca>0).mean():.0%} avg=${ca.mean():+.2f}/sh (missed {missed})")
 
 
 def _spy_correlation_diagnostic(best_sc, spy_close):
@@ -392,24 +392,24 @@ def _spy_correlation_diagnostic(best_sc, spy_close):
             eq_monthly.loc[common, 'ret'].values,
             spy_monthly.loc[common, 'ret'].values,
         )[0, 1]
-        print(f"\n  SPY MONTHLY CORRELATION: {corr:.2f}")
+        log.info(f"\n  SPY MONTHLY CORRELATION: {corr:.2f}")
         if corr < -0.3:
-            print(f"    \u2192 Useful portfolio hedge")
+            log.info(f"    \u2192 Useful portfolio hedge")
         elif abs(corr) < 0.2:
-            print(f"    \u2192 Market-neutral")
+            log.info(f"    \u2192 Market-neutral")
         else:
-            print(f"    \u2192 Correlated with market (unexpected for short strategy)")
+            log.info(f"    \u2192 Correlated with market (unexpected for short strategy)")
 
 
 def _earnings_proximity_diagnostic(data_bundle, wf_top):
     """Earnings proximity analysis for walk-forward trades."""
     cache = data_bundle['cache']
     cache_path = data_bundle['cache_path']
-    print(f"\n  EARNINGS PROXIMITY:")
+    log.info(f"\n  EARNINGS PROXIMITY:")
     earn_dates = cache.get('earnings_dates', {})
     if not earn_dates and len(wf_top) > 0:
         wf_tickers = list(wf_top['ticker'].unique())[:100]
-        print(f"    Downloading earnings dates for {len(wf_tickers)} tickers...")
+        log.info(f"    Downloading earnings dates for {len(wf_tickers)} tickers...")
         for tk in wf_tickers:
             try:
                 tkr = yf.Ticker(tk)
@@ -429,7 +429,7 @@ def _earnings_proximity_diagnostic(data_bundle, wf_top):
         cache['earnings_dates'] = earn_dates
         from data import save_cache
         save_cache(cache, cache_path)
-        print(f"    Got dates for {len(earn_dates)} tickers")
+        log.info(f"    Got dates for {len(earn_dates)} tickers")
 
     if earn_dates and len(wf_top) > 10:
         near_earn = []
@@ -454,15 +454,15 @@ def _earnings_proximity_diagnostic(data_bundle, wf_top):
         if len(near_earn) >= 5 and len(far_earn) >= 5:
             ne = pd.DataFrame(near_earn)
             fe = pd.DataFrame(far_earn)
-            print(f"    Near earnings (\u226415d): n={len(ne)} "
+            log.info(f"    Near earnings (\u226415d): n={len(ne)} "
                   f"win={(ne['pnl_per_share']>0).mean():.0%} "
                   f"avg=${ne['pnl_per_share'].mean():+.2f}/sh "
                   f"stop={ne['stopped'].mean():.0%}")
-            print(f"    Far from earnings (>30d): n={len(fe)} "
+            log.info(f"    Far from earnings (>30d): n={len(fe)} "
                   f"win={(fe['pnl_per_share']>0).mean():.0%} "
                   f"avg=${fe['pnl_per_share'].mean():+.2f}/sh "
                   f"stop={fe['stopped'].mean():.0%}")
         else:
-            print(f"    Insufficient earnings data (near={len(near_earn)}, far={len(far_earn)})")
+            log.info(f"    Insufficient earnings data (near={len(near_earn)}, far={len(far_earn)})")
     else:
-        print(f"    No earnings dates available")
+        log.info(f"    No earnings dates available")

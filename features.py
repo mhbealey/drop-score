@@ -12,6 +12,7 @@ from tqdm import tqdm
 from config import (
     FWD_WINDOWS, DROP_THRESH, EXCESS_THRESH,
     MIN_EVENTS, MAX_BASE_RATE, MIN_K, HOLDOUT_MO,
+    log,
 )
 from utils import elapsed, get_col, to_scalar, ensure_series
 
@@ -312,7 +313,7 @@ def build_features_from_scratch(data_bundle: dict) -> Tuple[
 
     Returns (df_q, df_dev, df_hold, df_daily).
     """
-    print("FEATURES: building from scratch...")
+    log.info("FEATURES: building from scratch...")
 
     df_inc = data_bundle['df_inc']
     df_bal = data_bundle['df_bal']
@@ -349,7 +350,7 @@ def build_features_from_scratch(data_bundle: dict) -> Tuple[
                 continue
 
     df_q = pd.DataFrame(rows)
-    print(f"  Raw quarterly rows: {len(df_q):,}")
+    log.info(f"  Raw quarterly rows: {len(df_q):,}")
 
     # === Filing delay feature (from EDGAR metadata) ===
     if edgar_filing_meta:
@@ -361,10 +362,10 @@ def build_features_from_scratch(data_bundle: dict) -> Tuple[
             delays.append(meta['filing_delay_days'] if meta else np.nan)
         df_q['filing_delay_days'] = delays
         n_with_delay = df_q['filing_delay_days'].notna().sum()
-        print(f"  Filing delay: {n_with_delay:,} rows with data")
+        log.info(f"  Filing delay: {n_with_delay:,} rows with data")
 
     if len(df_q) == 0:
-        print("  ERROR: No features built")
+        log.error("  ERROR: No features built")
         sys.exit(1)
 
     # === YoY growth features (need groupby ticker, sorted by date) ===
@@ -427,24 +428,24 @@ def build_features_from_scratch(data_bundle: dict) -> Tuple[
 
     # === Filter: need price and report_date ===
     df_q = df_q.dropna(subset=['price', 'report_date']).reset_index(drop=True)
-    print(f"  After filtering: {len(df_q):,} rows, {df_q['ticker'].nunique()} tickers")
+    log.info(f"  After filtering: {len(df_q):,} rows, {df_q['ticker'].nunique()} tickers")
 
     # === Dev / Holdout split ===
     # Anchor cutoff to SimFin's max date (not combined), so EDGAR doesn't shift it
     simfin_max_date = data_bundle.get('simfin_max_date')
     if simfin_max_date is not None:
         cutoff_anchor = pd.Timestamp(simfin_max_date)
-        print(f"  Cutoff anchor: SimFin max date {cutoff_anchor.date()}")
+        log.info(f"  Cutoff anchor: SimFin max date {cutoff_anchor.date()}")
     else:
         cutoff_anchor = df_q['report_date'].quantile(0.95)
-        print(f"  Cutoff anchor: 95th percentile {cutoff_anchor.date()}")
+        log.info(f"  Cutoff anchor: 95th percentile {cutoff_anchor.date()}")
     cutoff = cutoff_anchor - pd.DateOffset(months=HOLDOUT_MO)
     df_dev = df_q[df_q['report_date'] < cutoff].copy().reset_index(drop=True)
     df_hold = df_q[df_q['report_date'] >= cutoff].copy().reset_index(drop=True)
-    print(f"  Dev: {len(df_dev):,} | Hold: {len(df_hold):,} (cutoff: {cutoff.date()})")
+    log.info(f"  Dev: {len(df_dev):,} | Hold: {len(df_hold):,} (cutoff: {cutoff.date()})")
 
     # === Compute outcomes ===
-    print("  Computing outcomes...")
+    log.info("  Computing outcomes...")
     df_dev = recompute_outcomes(df_dev, price_dict, spy_close)
     df_hold = recompute_outcomes(df_hold, price_dict, spy_close)
 
@@ -458,9 +459,9 @@ def build_features_from_scratch(data_bundle: dict) -> Tuple[
                 'df_q': df_q, 'df_dev': df_dev,
                 'df_hold': df_hold, 'df_daily': df_daily,
             }, f)
-        print(f"  Saved intermediates to {intermediates_path}")
+        log.info(f"  Saved intermediates to {intermediates_path}")
     except Exception as e:
-        print(f"  Warning: could not save intermediates: {e}")
+        log.warning(f"  Warning: could not save intermediates: {e}")
 
     return df_q, df_dev, df_hold, df_daily
 
@@ -494,7 +495,7 @@ def prepare_features(data_bundle: dict) -> dict:
         data_bundle['df_daily'] = df_daily
         data_bundle['intm_loaded'] = True
 
-    print("FEATURES: processing...")
+    log.info("FEATURES: processing...")
     ocols = set(c for c in df_dev.columns if any(c.startswith(p) for p in opfx))
     fcols_q = sorted([
         c for c in df_dev.columns
@@ -504,7 +505,7 @@ def prepare_features(data_bundle: dict) -> dict:
     fill_meds_q = df_dev[fcols_q].median()
     has_voladj = any(c.startswith('voladj_') for c in df_dev.columns)
     if not has_voladj:
-        print("  Recomputing outcomes (voladj)...")
+        log.info("  Recomputing outcomes (voladj)...")
         old_oc = [c for c in df_dev.columns
                   if any(c.startswith(p) for p in opfx) and c not in fcols_q]
         df_dev.drop(columns=old_oc, inplace=True, errors='ignore')
@@ -535,7 +536,7 @@ def prepare_features(data_bundle: dict) -> dict:
                     'df_q': df_q, 'df_dev': df_dev,
                     'df_hold': df_hold, 'df_daily': df_daily,
                 }, f)
-            print("  Cached voladj")
+            log.info("  Cached voladj")
         except Exception:
             pass
 
@@ -554,10 +555,10 @@ def prepare_features(data_bundle: dict) -> dict:
         key=lambda c: df_dev[c].sum(), reverse=True,
     )[:3]
     tcols = list(set(ex_tgts + va_tgts + raw_tgts))
-    print(f"  Dev: {len(df_dev):,} | Hold: {len(df_hold):,} | "
+    log.info(f"  Dev: {len(df_dev):,} | Hold: {len(df_hold):,} | "
           f"Training {len(tcols)} targets ({len(ex_tgts)} ex, {len(va_tgts)} va, {len(raw_tgts)} raw)")
-    print(f"  [{time.time()-t0:.0f}s] {elapsed()}")
-    print()
+    log.info(f"  [{time.time()-t0:.0f}s] {elapsed()}")
+    log.info("")
 
     data_bundle.update(
         df_dev=df_dev, df_hold=df_hold,

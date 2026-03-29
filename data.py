@@ -21,7 +21,7 @@ def _patched_read_csv(*args, **kwargs):
 pd.read_csv = _patched_read_csv
 
 from config import (
-    SIMFIN_KEY, FMP_KEY, SECTOR_ETFS, FORCE_RECOMPUTE, VOL_FLOOR,
+    SIMFIN_KEY, FMP_KEY, SECTOR_ETFS, FORCE_RECOMPUTE, VOL_FLOOR, log,
 )
 from utils import strip_tz, elapsed
 from edgar import (
@@ -42,11 +42,11 @@ def setup_cache_dir() -> str:
         drive.mount('/content/drive', force_remount=False)
         cache_dir = '/content/drive/MyDrive/drop_score/'
         os.makedirs(cache_dir, exist_ok=True)
-        print("  Drive mounted")
+        log.info("  Drive mounted")
     except Exception:
         cache_dir = 'data/'
         os.makedirs(cache_dir, exist_ok=True)
-        print("  Using local data/")
+        log.info("  Using local data/")
     return cache_dir
 
 
@@ -59,7 +59,7 @@ def load_cache(cache_dir: str) -> Tuple[dict, str]:
             try:
                 with open(cf, 'rb') as f:
                     cache = pickle.load(f)
-                print(f"  Cache: {len(cache.get('prices', {}))} prices")
+                log.info(f"  Cache: {len(cache.get('prices', {}))} prices")
                 break
             except Exception:
                 continue
@@ -88,9 +88,9 @@ def load_intermediates(cache_dir, force_recompute=False):
             df_hold = intm['df_hold']
             df_daily = intm['df_daily']
             intm_loaded = True
-            print(f"  Intermediates: {len(df_q):,}q, {len(df_daily):,}d")
+            log.info(f"  Intermediates: {len(df_q):,}q, {len(df_daily):,}d")
         except Exception as e:
-            print(f"  Intermediates error: {e}")
+            log.warning(f"  Intermediates error: {e}")
             intm_loaded = False
     return intm_loaded, df_q, df_dev, df_hold, df_daily, intermediates_path
 
@@ -105,7 +105,7 @@ def load_simfin(cache, cache_path):
         df_inc = cache['df_inc']
         df_bal = cache['df_bal']
         df_cf = cache['df_cf']
-        print("  SimFin: cached")
+        log.info("  SimFin: cached")
     else:
         sf.set_api_key(SIMFIN_KEY)
         sf.set_data_dir('~/simfin_data/')
@@ -176,7 +176,7 @@ def build_universe(df_inc: pd.DataFrame, df_bal: pd.DataFrame,
     )
     universe = [tk for tk in universe_all if sector_map.get(tk) not in ('Financial',)]
     n_fin = len(universe_all) - len(universe)
-    print(f"  Universe: {len(universe_all)} raw -> {len(universe)} (excl {n_fin} financial)")
+    log.info(f"  Universe: {len(universe_all)} raw -> {len(universe)} (excl {n_fin} financial)")
     return universe
 
 
@@ -232,8 +232,8 @@ def _yf_download_with_retry(tickers, max_retries=3, base_delay=5, **kwargs):
             )
             if is_rate_limit and attempt < max_retries - 1:
                 delay = base_delay * (3 ** attempt) + random.uniform(0, 2)
-                print(f"    Rate limited (attempt {attempt+1}/{max_retries}), "
-                      f"waiting {delay:.0f}s...")
+                log.warning(f"    Rate limited (attempt {attempt+1}/{max_retries}), "
+                            f"waiting {delay:.0f}s...")
                 time.sleep(delay)
                 continue
             raise
@@ -273,7 +273,7 @@ def download_all_prices(universe, cache, cache_path):
     # Clear stale unavail set (retry after 7 days)
     unavail_ts = cache.get('unavail_ts', 0)
     if time.time() - unavail_ts > 7 * 86400 and unavail:
-        print(f"  Clearing {len(unavail)} stale unavailable tickers (>7d old)")
+        log.info(f"  Clearing {len(unavail)} stale unavailable tickers (>7d old)")
         unavail = set()
         cache['unavailable_tickers'] = unavail
         cache['unavail_ts'] = time.time()
@@ -297,9 +297,9 @@ def download_all_prices(universe, cache, cache_path):
         sp = sf.load_shareprices(market='us', variant='daily')
         if sp is not None and len(sp) > 0:
             simfin_price_tickers = set(sp.index.get_level_values('Ticker'))
-            print(f"  SimFin price universe: {len(simfin_price_tickers)} tickers")
+            log.info(f"  SimFin price universe: {len(simfin_price_tickers)} tickers")
     except Exception as e:
-        print(f"  SimFin price ticker list: {e}")
+        log.warning(f"  SimFin price ticker list: {e}")
 
     # What do we still need?
     all_need = [tk for tk in universe if tk not in price_dict and tk not in unavail]
@@ -308,12 +308,12 @@ def download_all_prices(universe, cache, cache_path):
 
     if not all_need:
         skipped = len([tk for tk in universe if tk in unavail])
-        print(f"  Cache: {cached_count} prices | {skipped} unavailable | "
-              f"{len(all_need)} to download")
+        log.info(f"  Cache: {cached_count} prices | {skipped} unavailable | "
+                 f"{len(all_need)} to download")
         return price_dict, unavail, simfin_price_tickers
 
-    print(f"  Need prices for {len(all_need)} tickers ({cached_count} cached, "
-          f"{len(unavail)} known-unavailable)...")
+    log.info(f"  Need prices for {len(all_need)} tickers ({cached_count} cached, "
+             f"{len(unavail)} known-unavailable)...")
 
     # ── Source 2: SimFin daily share prices (use already-loaded sp) ──
     need = [tk for tk in all_need if tk not in price_dict]
@@ -337,11 +337,11 @@ def download_all_prices(universe, cache, cache_path):
                             counts['simfin'] += 1
                     except Exception:
                         pass
-            print(f"    SimFin prices: +{counts['simfin']}")
+            log.info(f"    SimFin prices: +{counts['simfin']}")
             cache['prices'] = price_dict
             save_cache(cache, cache_path)
         except Exception as e:
-            print(f"    SimFin prices: {e}")
+            log.warning(f"    SimFin prices: {e}")
 
     # ── Source 3: yFinance batch (chunks of 500) ──
     need = [tk for tk in all_need if tk not in price_dict]
@@ -368,11 +368,11 @@ def download_all_prices(universe, cache, cache_path):
             except Exception as e:
                 err_str = str(e).lower()
                 if 'no data' not in err_str:
-                    print(f"    yFinance batch error: {e}")
+                    log.warning(f"    yFinance batch error: {e}")
             time.sleep(5)
         counts['yf_batch'] = len(price_dict) - before - counts['simfin']
         if counts['yf_batch'] > 0:
-            print(f"    yFinance batch: +{counts['yf_batch']}")
+            log.info(f"    yFinance batch: +{counts['yf_batch']}")
         cache['prices'] = price_dict
         save_cache(cache, cache_path)
 
@@ -403,7 +403,7 @@ def download_all_prices(universe, cache, cache_path):
                 pass
             time.sleep(0.3)
         if counts['fmp'] > 0:
-            print(f"    FMP historical: +{counts['fmp']}")
+            log.info(f"    FMP historical: +{counts['fmp']}")
         cache['prices'] = price_dict
         save_cache(cache, cache_path)
 
@@ -420,7 +420,7 @@ def download_all_prices(universe, cache, cache_path):
                 pass
             time.sleep(1)
         if counts['yf_individual'] > 0:
-            print(f"    yFinance individual: +{counts['yf_individual']}")
+            log.info(f"    yFinance individual: +{counts['yf_individual']}")
         cache['prices'] = price_dict
         save_cache(cache, cache_path)
 
@@ -435,16 +435,16 @@ def download_all_prices(universe, cache, cache_path):
     # ── Summary ──
     total_new = counts['simfin'] + counts['yf_batch'] + counts['fmp'] + counts['yf_individual']
     total = len([tk for tk in universe if tk in price_dict])
-    print(f"\n  {'='*45}")
-    print(f"  PRICE DOWNLOAD SUMMARY")
-    print(f"    Cache hit:            {counts['cache']:>5}")
-    print(f"    SimFin prices:        {counts['simfin']:>5}")
-    print(f"    yFinance batch:       {counts['yf_batch']:>5}")
-    print(f"    FMP historical:       {counts['fmp']:>5}")
-    print(f"    yFinance individual:  {counts['yf_individual']:>5}")
-    print(f"    Total:              {total:>5,}")
-    print(f"    Still missing:        {len(still_missing):>5}")
-    print(f"  {'='*45}")
+    log.info(f"\n  {'='*45}")
+    log.info(f"  PRICE DOWNLOAD SUMMARY")
+    log.info(f"    Cache hit:            {counts['cache']:>5}")
+    log.info(f"    SimFin prices:        {counts['simfin']:>5}")
+    log.info(f"    yFinance batch:       {counts['yf_batch']:>5}")
+    log.info(f"    FMP historical:       {counts['fmp']:>5}")
+    log.info(f"    yFinance individual:  {counts['yf_individual']:>5}")
+    log.info(f"    Total:              {total:>5,}")
+    log.info(f"    Still missing:        {len(still_missing):>5}")
+    log.info(f"  {'='*45}")
 
     return price_dict, unavail, simfin_price_tickers
 
@@ -460,7 +460,7 @@ def get_sp_index_tickers() -> Set[str]:
         if os.path.exists(f):
             with open(f) as fh:
                 tickers.update(line.strip().replace('.', '-') for line in fh if line.strip())
-    print(f"  S&P index: {len(tickers)} tickers from static files")
+    log.info(f"  S&P index: {len(tickers)} tickers from static files")
     return tickers
 
 
@@ -505,7 +505,7 @@ def derive_benchmarks(price_dict: Dict[str, pd.DataFrame]) -> Tuple[
 def load_all_data() -> dict:
     """Top-level entry point: load everything and return a data bundle dict."""
     t0 = time.time()
-    print("DATA...")
+    log.info("DATA...")
 
     cache_dir = setup_cache_dir()
     cache, cache_path = load_cache(cache_dir)
@@ -554,8 +554,8 @@ def load_all_data() -> dict:
     # Any universe ticker without SimFin data
     needs_fundamentals |= set(simfin_universe) - simfin_tickers_with_data
 
-    print(f"  EDGAR candidates: {len(needs_fundamentals)} tickers "
-          f"({len(sp_missing)} S&P missing, {len(sparse_simfin)} sparse)")
+    log.info(f"  EDGAR candidates: {len(needs_fundamentals)} tickers "
+             f"({len(sp_missing)} S&P missing, {len(sparse_simfin)} sparse)")
 
     edgar_data = {}
     edgar_filing_meta = {}
@@ -583,7 +583,7 @@ def load_all_data() -> dict:
         run_data_qa(df_inc, df_bal, df_cf, edgar_data, sp_tickers)
 
     except Exception as e:
-        print(f"  EDGAR failed: {e}")
+        log.warning(f"  EDGAR failed: {e}")
         import traceback
         traceback.print_exc()
 
@@ -593,10 +593,10 @@ def load_all_data() -> dict:
     # Diagnostic: S&P coverage after EDGAR
     universe_set = set(universe)
     sp_in_universe = sp_tickers & universe_set
-    print(f"  S&P in universe after EDGAR: {len(sp_in_universe)}/{len(sp_tickers)}")
+    log.info(f"  S&P in universe after EDGAR: {len(sp_in_universe)}/{len(sp_tickers)}")
 
     price_dict, unavail, simfin_price_tickers = download_all_prices(universe, cache, cache_path)
-    print(f"  SimFin price tickers: {len(simfin_price_tickers)}")
+    log.info(f"  SimFin price tickers: {len(simfin_price_tickers)}")
 
     training_universe = sorted(
         set(universe) & set(price_dict.keys())
@@ -609,11 +609,11 @@ def load_all_data() -> dict:
 
     spy_close, spy_ret, vix_series, sector_etf_ret = derive_benchmarks(price_dict)
 
-    print(f"  Training: {len(training_universe)} stocks | "
-          f"Tradeable: {len(tradeable_tickers)} for walk-forward "
-          f"({len(delisted_with_history)} delisted with history)")
-    print(f"  {elapsed()}")
-    print()
+    log.info(f"  Training: {len(training_universe)} stocks | "
+             f"Tradeable: {len(tradeable_tickers)} for walk-forward "
+             f"({len(delisted_with_history)} delisted with history)")
+    log.info(f"  {elapsed()}")
+    log.info("")
 
     return dict(
         cache_dir=cache_dir, cache=cache, cache_path=cache_path,

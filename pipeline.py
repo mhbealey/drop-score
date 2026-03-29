@@ -11,7 +11,7 @@ import pandas as pd
 from sklearn.metrics import roc_auc_score
 
 from config import (
-    N_BOOT, TRADING_TARGET, TRADING_HOLD, ENTRY_MODE,
+    N_BOOT, TRADING_TARGET, TRADING_HOLD, ENTRY_MODE, log,
 )
 from model import run_vulnerability_model, run_model, run_bayesian_optimization, run_bootstrap_ci
 from walkforward import run_walkforward
@@ -74,13 +74,13 @@ def run_pipeline(data_bundle: dict, label: str,
         if bundle.get('tradeable_tickers'):
             bundle['tradeable_tickers'] = bundle['tradeable_tickers'] & subset
 
-    print("=" * 70)
-    print(f"PIPELINE: {label}")
+    log.info("=" * 70)
+    log.info(f"PIPELINE: {label}")
     n_dev = len(bundle['df_dev'])
     n_hold = len(bundle['df_hold'])
     n_tickers = bundle['df_dev']['ticker'].nunique()
-    print(f"  {n_tickers} tickers | {n_dev:,} dev + {n_hold:,} holdout rows")
-    print("=" * 70)
+    log.info(f"  {n_tickers} tickers | {n_dev:,} dev + {n_hold:,} holdout rows")
+    log.info("=" * 70)
 
     bundle = run_vulnerability_model(bundle)
     bundle = run_walkforward(bundle)
@@ -92,7 +92,7 @@ def run_pipeline(data_bundle: dict, label: str,
 def holdout_eval(bundle: dict, label: str = "") -> Dict[str, float]:
     """Evaluate holdout on TRADING_TARGET. Returns dict of AUCs."""
     if label:
-        print(f"\n  HOLDOUT ({label}):")
+        log.info(f"\n  HOLDOUT ({label}):")
     best_v_t = bundle.get('best_v_t', TRADING_TARGET)
     v_results = bundle.get('v_results', {})
     df_hold = bundle['df_hold']
@@ -123,11 +123,11 @@ def holdout_eval(bundle: dict, label: str = "") -> Dict[str, float]:
                 dev_auc = v_results[tgt]['mauc']
                 marker = " <-- TRADING" if tgt == TRADING_TARGET else ""
                 if label:
-                    print(f"    {tgt}: Dev={dev_auc:.3f} Hold={ho_auc:.3f}{marker}")
+                    log.info(f"    {tgt}: Dev={dev_auc:.3f} Hold={ho_auc:.3f}{marker}")
                 results[tgt] = ho_auc
         except Exception as e:
             if label:
-                print(f"    {tgt}: error — {e}")
+                log.info(f"    {tgt}: error — {e}")
 
     return results
 

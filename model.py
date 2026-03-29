@@ -13,7 +13,7 @@ import lightgbm as lgb
 from sklearn.metrics import roc_auc_score
 from tqdm import tqdm
 
-from config import N_FOLDS, N_BOOT, MIN_K, TRADING_TARGET, TRADING_HOLD, ENTRY_MODE
+from config import N_FOLDS, N_BOOT, MIN_K, TRADING_TARGET, TRADING_HOLD, ENTRY_MODE, log
 from utils import clean_X, elapsed
 
 
@@ -174,7 +174,7 @@ def train_all_targets(df_dev: pd.DataFrame, fcols_q: List[str],
     label = "VULNERABILITY MODEL"
     if optuna_params:
         label += " (Optuna params)"
-    print(f"{label}...")
+    log.info(f"{label}...")
 
     v_results = {}
     for t in tqdm(tcols, desc="  Train"):
@@ -188,22 +188,22 @@ def train_all_targets(df_dev: pd.DataFrame, fcols_q: List[str],
     best_v_r = v_results[best_v_t]
     topf_v = best_v_r['imp'].index[:K].tolist()
 
-    print(f"\n  RESULTS:")
+    log.info(f"\n  RESULTS:")
     for prefix, label in [('exdrop_', 'EXCESS'), ('voladj_', 'VOL-ADJ'), ('drop_', 'RAW')]:
         grp = [t for t in v_results if t.startswith(prefix)]
         grp.sort(key=lambda k: v_results[k]['mauc'], reverse=True)
         if grp:
-            print(f"    {label}:")
+            log.info(f"    {label}:")
             for t in grp[:5]:
                 r = v_results[t]
                 mk = " \u25c4" if t == best_v_t else ""
-                print(f"      {t:<30} AUC:{r['mauc']:.3f} "
+                log.info(f"      {t:<30} AUC:{r['mauc']:.3f} "
                       f"[{r['clo']:.3f},{r['chi']:.3f}] "
                       f"BR:{tgt_rates.get(t,0):.0%}{mk}")
-    print(f"  BEST: {best_v_t} | {best_v_r['mauc']:.3f} | K={K}")
-    print(f"  Features: {topf_v}")
-    print(f"\n  LOCKED CONFIG: {TRADING_TARGET} / {TRADING_HOLD}d hold / {ENTRY_MODE} entry")
-    print(f"  (All targets trained for diagnostics. Only TRADING_TARGET used for walk-forward.)")
+    log.info(f"  BEST: {best_v_t} | {best_v_r['mauc']:.3f} | K={K}")
+    log.info(f"  Features: {topf_v}")
+    log.info(f"\n  LOCKED CONFIG: {TRADING_TARGET} / {TRADING_HOLD}d hold / {ENTRY_MODE} entry")
+    log.info(f"  (All targets trained for diagnostics. Only TRADING_TARGET used for walk-forward.)")
 
     return v_results, best_v_t, best_v_r, topf_v
 
@@ -219,7 +219,7 @@ def fundamental_only_tests(df_dev, fcols_q, fill_meds_q, v_results, best_v_t, K)
     r_fund = run_model(df_dev, fund_only, best_ex,
                        df_dev[fund_only].median(), N_FOLDS, 100, K)
     if r_fund:
-        print(f"\n  FUND-ONLY on {best_ex}: {r_fund['mauc']:.3f} "
+        log.info(f"\n  FUND-ONLY on {best_ex}: {r_fund['mauc']:.3f} "
               f"vs full {v_results[best_ex]['mauc']:.3f}")
 
     # Vol-adj pure-fundamental (no price features at all)
@@ -238,14 +238,14 @@ def fundamental_only_tests(df_dev, fcols_q, fill_meds_q, v_results, best_v_t, K)
         r_pf = run_model(df_dev, pure_fund, best_va,
                          df_dev[pure_fund].median(), N_FOLDS, 100, K)
         if r_pf:
-            print(f"  PURE-FUND on {best_va}: {r_pf['mauc']:.3f} "
+            log.info(f"  PURE-FUND on {best_va}: {r_pf['mauc']:.3f} "
                   f"vs full {v_results[best_va]['mauc']:.3f}")
             if r_pf['mauc'] > 0.62:
-                print(f"    \u2705 Real fundamental distress signal")
+                log.info(f"    \u2705 Real fundamental distress signal")
             elif r_pf['mauc'] > 0.55:
-                print(f"    \u26a0\ufe0f  Marginal fundamental signal")
+                log.info(f"    \u26a0\ufe0f  Marginal fundamental signal")
             else:
-                print(f"    \u274c No fundamental signal \u2014 power from price patterns")
+                log.info(f"    \u274c No fundamental signal \u2014 power from price patterns")
 
 
 def score_dev_holdout(df_dev, df_hold, fcols_q, fill_meds_q, best_v_r):
@@ -267,7 +267,7 @@ def score_dev_holdout(df_dev, df_hold, fcols_q, fill_meds_q, best_v_r):
 def truncated_holdout_test(df_dev, df_hold, Xh, fcols_q, fill_meds_q,
                            best_v_t, K):
     """Run truncated holdout test for leakage detection."""
-    print(f"\n  TRUNCATED HOLDOUT TEST:")
+    log.info(f"\n  TRUNCATED HOLDOUT TEST:")
     trunc_cut = df_dev['report_date'].quantile(0.75)
     trunc_train = df_dev[df_dev['report_date'] <= trunc_cut]
     if best_v_t in trunc_train.columns and trunc_train[best_v_t].sum() >= 30:
@@ -293,14 +293,14 @@ def truncated_holdout_test(df_dev, df_hold, Xh, fcols_q, fill_meds_q,
                             yh_t[valid_full],
                             df_hold['vuln_score'].values[valid_full],
                         )
-                        print(f"    Full-dev holdout:  {ho_full:.3f}")
+                        log.info(f"    Full-dev holdout:  {ho_full:.3f}")
                     else:
-                        print(f"    Full-dev holdout: N/A")
-                    print(f"    Trunc-dev holdout: {ho_trunc:.3f}")
-                    print(f"    (If similar \u2192 no leakage. "
+                        log.info(f"    Full-dev holdout: N/A")
+                    log.info(f"    Trunc-dev holdout: {ho_trunc:.3f}")
+                    log.info(f"    (If similar \u2192 no leakage. "
                           f"If trunc is lower \u2192 sampling variation in full holdout)")
             except Exception as e:
-                print(f"    Truncated holdout error: {e}")
+                log.warning(f"    Truncated holdout error: {e}")
 
 
 def run_vulnerability_model(data_bundle: dict) -> dict:
@@ -325,9 +325,9 @@ def run_vulnerability_model(data_bundle: dict) -> dict:
         available = [f for f in locked_features if f in fcols_q]
         missing = [f for f in locked_features if f not in fcols_q]
         if missing:
-            print(f"  WARNING: locked features not in data: {missing}")
+            log.warning(f"  WARNING: locked features not in data: {missing}")
         K = len(available)
-        print(f"  Using locked features (K={K}): {available}")
+        log.info(f"  Using locked features (K={K}): {available}")
     else:
         K = pareto_optimise(df_dev, fcols_q, fill_meds_q, tcols)
 
@@ -354,8 +354,8 @@ def run_vulnerability_model(data_bundle: dict) -> dict:
     vuln_top = df_dev[
         df_dev['vuln_score'] >= df_dev['vuln_score'].quantile(0.80)
     ]['ticker'].unique()
-    print(f"\n  Flagged: {len(vuln_top)} | {elapsed()}")
-    print()
+    log.info(f"\n  Flagged: {len(vuln_top)} | {elapsed()}")
+    log.info("")
 
     data_bundle.update(
         df_dev=df_dev, df_hold=df_hold,
@@ -376,7 +376,7 @@ def run_bayesian_optimization(data_bundle: dict, n_trials: int = 30,
         import optuna
         optuna.logging.set_verbosity(optuna.logging.WARNING)
     except ImportError:
-        print("  Optuna not available, skipping Bayesian optimization")
+        log.info("  Optuna not available, skipping Bayesian optimization")
         return data_bundle
 
     df_dev = data_bundle['df_dev']
@@ -387,7 +387,7 @@ def run_bayesian_optimization(data_bundle: dict, n_trials: int = 30,
 
     target = TRADING_TARGET
     if target not in df_dev.columns or df_dev[target].sum() < 30:
-        print("  Not enough target events for Bayesian optimization")
+        log.info("  Not enough target events for Bayesian optimization")
         return data_bundle
 
     vd = df_dev.dropna(subset=[target])
@@ -400,7 +400,7 @@ def run_bayesian_optimization(data_bundle: dict, n_trials: int = 30,
     ytr, yte = y.iloc[:split], y.iloc[split:]
 
     if yte.sum() < 5 or ytr.sum() < 10:
-        print("  Insufficient events for Bayesian optimization")
+        log.info("  Insufficient events for Bayesian optimization")
         return data_bundle
 
     sw = (len(ytr) - ytr.sum()) / max(ytr.sum(), 1)
@@ -449,32 +449,32 @@ def run_bayesian_optimization(data_bundle: dict, n_trials: int = 30,
         except Exception:
             return 0.5
 
-    print(f"\n  ═══ BAYESIAN OPTIMIZATION ═══")
-    print(f"  Target: {target} | Features: {len(topf_v)} | Trials: {n_trials}")
+    log.info(f"\n  ═══ BAYESIAN OPTIMIZATION ═══")
+    log.info(f"  Target: {target} | Features: {len(topf_v)} | Trials: {n_trials}")
 
     study = optuna.create_study(direction='maximize')
     study.optimize(objective, n_trials=n_trials, timeout=timeout)
 
-    print(f"  Trials completed: {len(study.trials)}")
-    print(f"  Best AUC: {study.best_value:.3f}")
+    log.info(f"  Trials completed: {len(study.trials)}")
+    log.info(f"  Best AUC: {study.best_value:.3f}")
 
     # Extract best params
     bp = study.best_params
-    print(f"  Best XGB weight: {bp.get('xgb_weight', 0.5):.2f}")
-    print(f"  Best XGB: depth={bp.get('xgb_max_depth')}, "
+    log.info(f"  Best XGB weight: {bp.get('xgb_weight', 0.5):.2f}")
+    log.info(f"  Best XGB: depth={bp.get('xgb_max_depth')}, "
           f"lr={bp.get('xgb_lr', 0.05):.3f}, "
           f"n_est={bp.get('xgb_n_est', 500)}")
-    print(f"  Best LGB: depth={bp.get('lgb_max_depth')}, "
+    log.info(f"  Best LGB: depth={bp.get('lgb_max_depth')}, "
           f"lr={bp.get('lgb_lr', 0.05):.3f}, "
           f"n_est={bp.get('lgb_n_est', 200)}")
 
     # Compare to baseline
     baseline_r = data_bundle.get('v_results', {}).get(target, {})
     baseline_auc = baseline_r.get('mauc', 0.5) if baseline_r else 0.5
-    print(f"  Baseline dev AUC (fixed params): {baseline_auc:.3f}")
-    print(f"  Optimized AUC: {study.best_value:.3f}")
-    print(f"  Improvement: {study.best_value - baseline_auc:+.3f}")
-    print(f"  ═══ END BAYESIAN OPTIMIZATION ═══\n")
+    log.info(f"  Baseline dev AUC (fixed params): {baseline_auc:.3f}")
+    log.info(f"  Optimized AUC: {study.best_value:.3f}")
+    log.info(f"  Improvement: {study.best_value - baseline_auc:+.3f}")
+    log.info(f"  ═══ END BAYESIAN OPTIMIZATION ═══\n")
 
     data_bundle['optuna_study'] = study
     data_bundle['optuna_best_params'] = bp
@@ -503,11 +503,11 @@ def run_bootstrap_ci(wf_top: pd.DataFrame, n_boot: int = 1000) -> dict:
         'pnl_ci_hi': np.percentile(boot_pnl, 97.5),
     }
 
-    print(f"\n  ═══ CONFIDENCE INTERVALS (Bootstrap, n={n_boot}) ═══")
-    print(f"  Win rate: {results['win_mean']:.1%} "
+    log.info(f"\n  ═══ CONFIDENCE INTERVALS (Bootstrap, n={n_boot}) ═══")
+    log.info(f"  Win rate: {results['win_mean']:.1%} "
           f"[{results['win_ci_lo']:.1%}, {results['win_ci_hi']:.1%}]")
-    print(f"  Avg P&L: ${results['pnl_mean']:.2f} "
+    log.info(f"  Avg P&L: ${results['pnl_mean']:.2f} "
           f"[${results['pnl_ci_lo']:.2f}, ${results['pnl_ci_hi']:.2f}]")
-    print(f"  ═══ END BOOTSTRAP CIs ═══\n")
+    log.info(f"  ═══ END BOOTSTRAP CIs ═══\n")
 
     return results

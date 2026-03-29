@@ -14,7 +14,7 @@ import pandas as pd
 import numpy as np
 
 from config import (
-    SEC_HEADERS, SEC_RATE_DELAY, EDGAR_MAPPING_VERSION,
+    log, SEC_HEADERS, SEC_RATE_DELAY, EDGAR_MAPPING_VERSION,
     XBRL_TO_FIELD, BALANCE_SHEET_FIELDS, ALL_CORE_FIELDS,
     SIMFIN_INCOME_FIELDS, SIMFIN_BALANCE_FIELDS, SIMFIN_CASHFLOW_FIELDS,
 )
@@ -33,7 +33,7 @@ def load_cik_map(cache_dir: str = 'data/') -> Dict[str, str]:
             with open(path) as f:
                 return json.load(f)
 
-    print("  Downloading SEC CIK map...")
+    log.info("  Downloading SEC CIK map...")
     url = 'https://www.sec.gov/files/company_tickers.json'
     req = urllib.request.Request(url, headers=SEC_HEADERS)
     resp = urllib.request.urlopen(req, timeout=30)
@@ -48,7 +48,7 @@ def load_cik_map(cache_dir: str = 'data/') -> Dict[str, str]:
     os.makedirs(cache_dir, exist_ok=True)
     with open(path, 'w') as f:
         json.dump(cik_map, f)
-    print(f"  CIK map: {len(cik_map)} tickers")
+    log.info(f"  CIK map: {len(cik_map)} tickers")
     return cik_map
 
 
@@ -282,7 +282,7 @@ def load_edgar_cache(cache_dir='data/'):
                 with open(parsed_path, 'rb') as f:
                     data = pickle.load(f)
                 unique = len({k[0] for k in data})
-                print(f"  EDGAR: {unique} tickers from parsed cache (v{cached_version})")
+                log.info(f"  EDGAR: {unique} tickers from parsed cache (v{cached_version})")
                 return data
             except Exception:
                 pass
@@ -291,7 +291,7 @@ def load_edgar_cache(cache_dir='data/'):
     # Version stale — try to re-parse from raw JSON
     raw_cache = _load_raw_json_cache(cache_dir)
     if raw_cache:
-        print(f"  EDGAR: re-parsing {len(raw_cache)} cached tickers "
+        log.info(f"  EDGAR: re-parsing {len(raw_cache)} cached tickers "
               f"(mapping v{cached_version} -> v{_MAPPING_VERSION})")
         all_data = {}
         for ticker, facts_json in raw_cache.items():
@@ -300,7 +300,7 @@ def load_edgar_cache(cache_dir='data/'):
                 all_data.update(quarterly)
         save_edgar_cache(all_data, cache_dir)
         unique = len({k[0] for k in all_data})
-        print(f"  EDGAR: re-parsed {unique} tickers, {len(all_data)} quarters")
+        log.info(f"  EDGAR: re-parsed {unique} tickers, {len(all_data)} quarters")
         return all_data
 
     # No raw JSON — fall back to stale parsed data (better than re-downloading)
@@ -309,7 +309,7 @@ def load_edgar_cache(cache_dir='data/'):
             with open(parsed_path, 'rb') as f:
                 data = pickle.load(f)
             unique = len({k[0] for k in data})
-            print(f"  EDGAR: using stale parsed cache ({unique} tickers, "
+            log.info(f"  EDGAR: using stale parsed cache ({unique} tickers, "
                   f"v{cached_version}); will save raw JSON on next fetch")
             return data
         except Exception:
@@ -346,11 +346,11 @@ def fetch_edgar_fundamentals(tickers_to_fetch: List[str], cik_map: Dict[str, str
                 if t in cik_map and t not in already_fetched]
 
     if not to_fetch:
-        print(f"  EDGAR: {len(already_fetched)} cached ({len(raw_cache)} raw JSON), "
+        log.info(f"  EDGAR: {len(already_fetched)} cached ({len(raw_cache)} raw JSON), "
               f"0 to fetch")
         return all_data
 
-    print(f"  EDGAR: {len(already_fetched)} cached, {len(to_fetch)} to fetch")
+    log.info(f"  EDGAR: {len(already_fetched)} cached, {len(to_fetch)} to fetch")
 
     fetched_count = 0
     failed_count = 0
@@ -373,12 +373,12 @@ def fetch_edgar_fundamentals(tickers_to_fetch: List[str], cik_map: Dict[str, str
             if (i + 1) % 100 == 0:
                 save_edgar_cache(all_data, cache_dir)
                 _save_raw_json_cache(raw_cache, cache_dir)
-                print(f"    EDGAR progress: {i+1}/{len(to_fetch)} "
+                log.info(f"    EDGAR progress: {i+1}/{len(to_fetch)} "
                       f"(+{fetched_count} ok, {failed_count} empty)")
 
         except urllib.error.HTTPError as e:
             if e.code == 429:
-                print(f"    Rate limited at {i}, sleeping 120s...")
+                log.info(f"    Rate limited at {i}, sleeping 120s...")
                 time.sleep(120)
                 try:
                     facts_json = _fetch_company_facts(cik)
@@ -399,8 +399,8 @@ def fetch_edgar_fundamentals(tickers_to_fetch: List[str], cik_map: Dict[str, str
     save_edgar_cache(all_data, cache_dir)
     _save_raw_json_cache(raw_cache, cache_dir)
     unique_tickers = len({k[0] for k in all_data})
-    print(f"    EDGAR done: +{fetched_count} tickers ({failed_count} empty/failed)")
-    print(f"    EDGAR cache total: {unique_tickers} tickers, "
+    log.info(f"    EDGAR done: +{fetched_count} tickers ({failed_count} empty/failed)")
+    log.info(f"    EDGAR cache total: {unique_tickers} tickers, "
           f"{len(all_data)} quarter-rows")
 
     return all_data
@@ -495,13 +495,13 @@ def merge_edgar_into_simfin(
     in_all_3 = inc_tickers & bal_tickers & cf_tickers
     edgar_in_all_3 = new_tickers & in_all_3
 
-    print(f"\n  {'='*50}")
-    print(f"  FUNDAMENTAL COVERAGE")
-    print(f"    SimFin:        {n_simfin} tickers")
-    print(f"    EDGAR new:    +{n_new} tickers ({len(edgar_in_all_3)} in all 3 frames)")
-    print(f"    Gap-fill:     +{filled_count} fields in {n_overlap} overlap tickers")
-    print(f"    Combined:      {total_tickers} tickers ({total_quarters} quarters)")
-    print(f"  {'='*50}\n")
+    log.info(f"\n  {'='*50}")
+    log.info(f"  FUNDAMENTAL COVERAGE")
+    log.info(f"    SimFin:        {n_simfin} tickers")
+    log.info(f"    EDGAR new:    +{n_new} tickers ({len(edgar_in_all_3)} in all 3 frames)")
+    log.info(f"    Gap-fill:     +{filled_count} fields in {n_overlap} overlap tickers")
+    log.info(f"    Combined:      {total_tickers} tickers ({total_quarters} quarters)")
+    log.info(f"  {'='*50}\n")
 
     return df_inc, df_bal, df_cf, filing_meta
 
@@ -573,13 +573,13 @@ def edgar_field_diagnostic(edgar_data: Dict[tuple, dict]) -> None:
     Helps diagnose XBRL mapping coverage after parse changes.
     """
     if not edgar_data:
-        print("  EDGAR diagnostic: no data")
+        log.info("  EDGAR diagnostic: no data")
         return
 
     tickers = {k[0] for k in edgar_data}
     n_quarters = len(edgar_data)
-    print(f"\n  ═══ EDGAR FIELD DIAGNOSTIC ═══")
-    print(f"  {len(tickers)} tickers, {n_quarters} quarter-rows")
+    log.info(f"\n  ═══ EDGAR FIELD DIAGNOSTIC ═══")
+    log.info(f"  {len(tickers)} tickers, {n_quarters} quarter-rows")
 
     # Count non-null per field
     field_counts = {}
@@ -590,13 +590,13 @@ def edgar_field_diagnostic(edgar_data: Dict[tuple, dict]) -> None:
             if f in fields and fields[f] is not None and not (isinstance(fields[f], float) and np.isnan(fields[f])):
                 field_counts[f] += 1
 
-    print(f"  {'Field':<45s} {'Present':>8s} {'Null%':>7s}")
-    print(f"  {'-'*62}")
+    log.info(f"  {'Field':<45s} {'Present':>8s} {'Null%':>7s}")
+    log.info(f"  {'-'*62}")
     for f in sorted(field_counts, key=lambda x: field_counts[x], reverse=True):
         present = field_counts[f]
         null_pct = 1 - present / n_quarters
         status = 'OK' if null_pct < 0.3 else 'WARN' if null_pct < 0.6 else 'HIGH'
-        print(f"  {f:<45s} {present:>8,} {null_pct:>6.0%} [{status}]")
+        log.info(f"  {f:<45s} {present:>8,} {null_pct:>6.0%} [{status}]")
 
     # Margin-relevant fields specifically
     margin_fields = ['Revenue', 'Cost of Revenue', 'Gross Profit',
@@ -607,21 +607,21 @@ def edgar_field_diagnostic(edgar_data: Dict[tuple, dict]) -> None:
                  if 'Gross Profit' in v and v['Gross Profit'] is not None)
     has_cogs = sum(1 for v in edgar_data.values()
                    if 'Cost of Revenue' in v and v['Cost of Revenue'] is not None)
-    print(f"\n  Margin coverage: Revenue={has_revenue}/{n_quarters} "
+    log.info(f"\n  Margin coverage: Revenue={has_revenue}/{n_quarters} "
           f"GrossProfit={has_gp}/{n_quarters} COGS={has_cogs}/{n_quarters}")
     if has_revenue > 0 and has_gp / has_revenue < 0.5:
         gp_derived = sum(1 for v in edgar_data.values()
                          if 'Revenue' in v and 'Cost of Revenue' in v
                          and v.get('Revenue') and v.get('Cost of Revenue'))
-        print(f"  GP derivable from Revenue-COGS: {gp_derived} rows")
-    print(f"  ═══ END EDGAR DIAGNOSTIC ═══\n")
+        log.info(f"  GP derivable from Revenue-COGS: {gp_derived} rows")
+    log.info(f"  ═══ END EDGAR DIAGNOSTIC ═══\n")
 
 
 def run_data_qa(df_inc: pd.DataFrame, df_bal: pd.DataFrame,
                 df_cf: pd.DataFrame, edgar_data: Dict[tuple, dict],
                 sp_tickers: Set[str]) -> dict:
     """Comprehensive data quality audit after merge."""
-    print("\n  ═══ DATA QA ═══")
+    log.info("\n  ═══ DATA QA ═══")
 
     all_tickers = set(df_inc.index.get_level_values('Ticker').unique())
     edgar_tickers = {k[0] for k in edgar_data} if edgar_data else set()
@@ -630,11 +630,11 @@ def run_data_qa(df_inc: pd.DataFrame, df_bal: pd.DataFrame,
     overlap = all_tickers & edgar_tickers
     sp_covered = all_tickers & sp_tickers if sp_tickers else set()
 
-    print(f"  Total tickers with fundamentals: {len(all_tickers)}")
-    print(f"  SimFin-only: {len(simfin_only)}")
-    print(f"  EDGAR-only: {len(edgar_only & all_tickers)}")
-    print(f"  Both sources: {len(overlap)}")
-    print(f"  S&P coverage: {len(sp_covered)}/{len(sp_tickers)}")
+    log.info(f"  Total tickers with fundamentals: {len(all_tickers)}")
+    log.info(f"  SimFin-only: {len(simfin_only)}")
+    log.info(f"  EDGAR-only: {len(edgar_only & all_tickers)}")
+    log.info(f"  Both sources: {len(overlap)}")
+    log.info(f"  S&P coverage: {len(sp_covered)}/{len(sp_tickers)}")
 
     # Temporal coverage
     for label, tickers in [('SimFin', simfin_only), ('EDGAR', edgar_only & all_tickers)]:
@@ -646,12 +646,12 @@ def run_data_qa(df_inc: pd.DataFrame, df_bal: pd.DataFrame,
         sub = df_inc[mask]
         quarters_per = sub.groupby('Ticker').size()
         dates = sub.index.get_level_values('Report Date')
-        print(f"  {label}: median {quarters_per.median():.0f} quarters/ticker, "
+        log.info(f"  {label}: median {quarters_per.median():.0f} quarters/ticker, "
               f"range {quarters_per.min()}-{quarters_per.max()}")
-        print(f"  {label}: date range {dates.min().date()} to {dates.max().date()}")
+        log.info(f"  {label}: date range {dates.min().date()} to {dates.max().date()}")
 
     # Field completeness
-    print(f"\n  Field completeness:")
+    log.info(f"\n  Field completeness:")
     for df_frame, fields, label in [
         (df_inc, SIMFIN_INCOME_FIELDS, 'Income'),
         (df_bal, SIMFIN_BALANCE_FIELDS, 'Balance'),
@@ -659,19 +659,19 @@ def run_data_qa(df_inc: pd.DataFrame, df_bal: pd.DataFrame,
     ]:
         for col in fields:
             if col not in df_frame.columns:
-                print(f"    {col}: MISSING from {label} frame")
+                log.info(f"    {col}: MISSING from {label} frame")
                 continue
             pct_null = df_frame[col].isna().mean()
             status = 'OK' if pct_null < 0.3 else 'WARN' if pct_null < 0.6 else 'HIGH'
-            print(f"    {col}: {pct_null:.0%} null [{status}]")
+            log.info(f"    {col}: {pct_null:.0%} null [{status}]")
 
     # Duplicate check
     for label, df_frame in [('Income', df_inc), ('Balance', df_bal), ('CashFlow', df_cf)]:
         dupes = df_frame.index.duplicated().sum()
         if dupes > 0:
-            print(f"  WARNING: {dupes} duplicate (ticker, date) rows in {label}")
+            log.warning(f"  WARNING: {dupes} duplicate (ticker, date) rows in {label}")
 
-    print(f"  ═══ END DATA QA ═══\n")
+    log.info(f"  ═══ END DATA QA ═══\n")
 
     return {
         'total': len(all_tickers),
@@ -686,7 +686,7 @@ def run_data_qa(df_inc: pd.DataFrame, df_bal: pd.DataFrame,
 def run_feature_qa(df_dev: pd.DataFrame, df_hold: pd.DataFrame,
                    edgar_tickers: Set[str], fcols_q: List[str]) -> dict:
     """Feature quality audit after feature engineering."""
-    print("\n  ═══ FEATURE QA ═══")
+    log.info("\n  ═══ FEATURE QA ═══")
 
     # Track source
     if edgar_tickers:
@@ -696,7 +696,7 @@ def run_feature_qa(df_dev: pd.DataFrame, df_hold: pd.DataFrame,
         dev_edgar = pd.DataFrame()
         dev_simfin = df_dev
 
-    print(f"  Feature rows: SimFin={len(dev_simfin):,} EDGAR={len(dev_edgar):,}")
+    log.info(f"  Feature rows: SimFin={len(dev_simfin):,} EDGAR={len(dev_edgar):,}")
 
     # Feature completeness by source
     warn_feats = []
@@ -707,11 +707,11 @@ def run_feature_qa(df_dev: pd.DataFrame, df_hold: pd.DataFrame,
             warn_feats.append((feat, sf_null, ed_null))
 
     if warn_feats:
-        print(f"  Features with high EDGAR null rate:")
+        log.info(f"  Features with high EDGAR null rate:")
         for feat, sf_n, ed_n in warn_feats[:10]:
-            print(f"    {feat}: SimFin {sf_n:.0%} null, EDGAR {ed_n:.0%} null")
+            log.info(f"    {feat}: SimFin {sf_n:.0%} null, EDGAR {ed_n:.0%} null")
     else:
-        print(f"  All features have acceptable null rates")
+        log.info(f"  All features have acceptable null rates")
 
     # Inf/NaN audit
     total_inf = 0
@@ -719,7 +719,7 @@ def run_feature_qa(df_dev: pd.DataFrame, df_hold: pd.DataFrame,
         if feat in df_dev.columns:
             n_inf = np.isinf(df_dev[feat]).sum()
             total_inf += n_inf
-    print(f"  Total inf values across features: {total_inf}")
+    log.info(f"  Total inf values across features: {total_inf}")
 
     # Target distribution by source — flag large discrepancies
     target_cols = [c for c in df_dev.columns if c.startswith('exdrop_')]
@@ -729,14 +729,14 @@ def run_feature_qa(df_dev: pd.DataFrame, df_hold: pd.DataFrame,
         ed_rate = dev_edgar[tgt].mean() if tgt in dev_edgar.columns and len(dev_edgar) > 0 else 0
         ratio = ed_rate / sf_rate if sf_rate > 0 else float('inf')
         flag = ' ⚠ RATE GAP' if ratio > 2.5 or ratio < 0.4 else ''
-        print(f"  {tgt}: SimFin rate={sf_rate:.3f}, EDGAR rate={ed_rate:.3f} (ratio={ratio:.1f}x){flag}")
+        log.info(f"  {tgt}: SimFin rate={sf_rate:.3f}, EDGAR rate={ed_rate:.3f} (ratio={ratio:.1f}x){flag}")
         if ratio > 2.5 or ratio < 0.4:
             base_rate_warnings += 1
     if base_rate_warnings:
-        print(f"  NOTE: EDGAR tickers (S&P 400/600) tend to be smaller/mid-cap")
-        print(f"        Higher ex-div drop rates are expected for smaller companies")
+        log.info(f"  NOTE: EDGAR tickers (S&P 400/600) tend to be smaller/mid-cap")
+        log.info(f"        Higher ex-div drop rates are expected for smaller companies")
 
-    print(f"  ═══ END FEATURE QA ═══\n")
+    log.info(f"  ═══ END FEATURE QA ═══\n")
 
     return {
         'n_simfin_rows': len(dev_simfin),
