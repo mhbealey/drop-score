@@ -68,7 +68,7 @@ DATA...
   S&P in universe after EDGAR: 803/971
   Cache: 3103 prices | 94 unavailable | 0 to download
   Training: 3103 stocks | Tradeable: 642 for walk-forward (2461 delisted with history)
-  [22m2s]
+  [21m5s]
 
 FEATURES: building from scratch...
   Raw quarterly rows: 61,322
@@ -76,3 +76,383 @@ FEATURES: building from scratch...
   After filtering: 60,194 rows, 3096 tickers
   Dev: 50,552 | Hold: 9,642 (cutoff: 2024-06-30)
   Computing outcomes...
+  Saved intermediates to data/v14_intermediates.pkl
+FEATURES: processing...
+  Dev: 50,540 | Hold: 9,642 | Training 26 targets (13 ex, 10 va, 3 raw)
+  [547s] [30m12s]
+
+
+  ═══ FEATURE QA ═══
+  Feature rows: SimFin=36,100 EDGAR=14,440
+  Features with high EDGAR null rate:
+    capex_to_revenue: SimFin 7% null, EDGAR 64% null
+    cfo_to_revenue: SimFin 7% null, EDGAR 88% null
+    current_ratio: SimFin 0% null, EDGAR 53% null
+    current_ratio_qoq: SimFin 7% null, EDGAR 56% null
+    dollar_volume: SimFin 11% null, EDGAR 62% null
+    ey_x_mom: SimFin 15% null, EDGAR 70% null
+    fcf_margin: SimFin 7% null, EDGAR 64% null
+    gross_margin: SimFin 17% null, EDGAR 85% null
+    gross_margin_qoq: SimFin 24% null, EDGAR 88% null
+    interest_coverage: SimFin 13% null, EDGAR 52% null
+  Total inf values across features: 0
+  exdrop_5_5d: SimFin rate=0.192, EDGAR rate=0.179 (ratio=0.9x)
+  exdrop_10_5d: SimFin rate=0.064, EDGAR rate=0.063 (ratio=1.0x)
+  exdrop_15_5d: SimFin rate=0.023, EDGAR rate=0.028 (ratio=1.2x)
+  ═══ END FEATURE QA ═══
+
+
+######################################################################
+# UNIVERSE A: Full SimFin
+######################################################################
+======================================================================
+PIPELINE: Full SimFin
+  3089 tickers | 50,540 dev + 9,642 holdout rows
+======================================================================
+VULNERABILITY MODEL...
+
+  RESULTS:
+    EXCESS:
+      exdrop_15_5d                   AUC:0.812 [0.792,0.829] BR:2%
+      exdrop_15_10d                  AUC:0.811 [0.799,0.825] BR:7%
+      exdrop_10_5d                   AUC:0.787 [0.775,0.799] BR:6%
+      exdrop_10_10d                  AUC:0.781 [0.771,0.791] BR:13%
+      exdrop_15_21d                  AUC:0.777 [0.766,0.787] BR:13%
+    VOL-ADJ:
+      voladj_2sig_10d                AUC:0.919 [0.902,0.932] BR:13% ◄
+      voladj_2sig_5d                 AUC:0.918 [0.902,0.931] BR:13%
+      voladj_1sig_5d                 AUC:0.786 [0.762,0.807] BR:23%
+      voladj_1sig_10d                AUC:0.785 [0.759,0.808] BR:24%
+      voladj_2sig_63d                AUC:0.748 [0.704,0.777] BR:2%
+    RAW:
+      drop_5_10d                     AUC:0.758 [0.736,0.777] BR:34%
+      drop_5_63d                     AUC:0.689 [0.672,0.706] BR:39%
+      drop_5_42d                     AUC:0.677 [0.659,0.695] BR:37%
+  BEST: voladj_2sig_10d | 0.919 | K=10
+  Features: ['log_revenue', 'capex_to_revenue', 'dollar_volume', 'filing_delay_days', 'vol_ratio_30_60', 'mom_21d', 'vol_30d', 'liab_to_assets', 'accruals', 'fcf_margin']
+
+  LOCKED CONFIG: exdrop_15_10d / 21d hold / confirmed entry
+  (All targets trained for diagnostics. Only TRADING_TARGET used for walk-forward.)
+
+  FUND-ONLY on exdrop_15_5d: 0.809 vs full 0.812
+  PURE-FUND on voladj_2sig_10d: 0.911 vs full 0.919
+    ✅ Real fundamental distress signal
+
+  TRUNCATED HOLDOUT TEST:
+    Full-dev holdout:  0.583
+    Trunc-dev holdout: 0.581
+    (If similar → no leakage. If trunc is lower → sampling variation in full holdout)
+
+  Flagged: 852 | [34m12s]
+
+======================================================================
+WALK-FORWARD: exdrop_15_10d / 21d hold / confirmed entry
+======================================================================
+
+  Target: exdrop_15_10d (AUC=0.811)
+  Hold: 21d | Entry: confirmed (2% in 5d)
+  Borrow: 3% (easy, vol>=1M) / 6% (hard, vol<1M)
+
+  Tier          n   Win   Raw$/sh  Borw$/sh   Net$/sh    Net%  Stops
+  ------------------------------------------------------------
+  Top 10%       7   86% $  +1.63 $   0.01 $  +1.62  +10.8%   29%
+  Top 25%      17   82% $  -1.14 $   0.05 $  -1.19   +9.5%   35%
+  Top 50%      33   76% $  -0.28 $   0.05 $  -0.32   +7.0%   42%
+  Full         66   68% $  +0.13 $   0.04 $  +0.09   +4.4%   44%
+
+  TOP 25% BY QUARTER (17 trades):
+    2021Q3: n=  3 win=33% raw=$-18.20 borrow=$0.17 net=$-18.38/sh
+    2021Q4: n=  6 win=100% raw=$+1.46 borrow=$0.01 net=$+1.46/sh
+    2022Q1: n=  6 win=100% raw=$+4.47 borrow=$0.04 net=$+4.43/sh
+
+  Profitable quarters: 3/5
+  Trades: 66 total, 17 top-25%
+  [7s] [34m19s]
+
+======================================================================
+EQUITY CURVES + DYNAMIC REGIME
+======================================================================
+  REGIME DIAGNOSTIC (when would triggers fire?):
+    2021Q3 @ 3%: triggers day 44 (2021-09-02)
+    2021Q3 @ 4%: never triggers
+    2021Q3 @ 5%: never triggers
+
+  ACCOUNT SCENARIOS (top-25% trades, +4% regime check):
+    Conservative   $10,000→$  12,042 (+20%) DD=$   -336 (-3%) Cal=4.19 trades=17
+    Moderate       $25,000→$  30,019 (+20%) DD=$   -890 (-3%) Cal=3.86 trades=17
+    Aggressive     $50,000→$  60,069 (+20%) DD=$ -1,782 (-3%) Cal=3.87 trades=17
+
+  RAMP-UP ($5K start, scale 25% after profitable Q):
+    Start: $5,000 | End: $6,204 (+24%)
+    Position size: $1,000 → $1,952
+    Trades: 17
+      2021Q2: $   5,099 (Q P&L $+99, size $1,000)
+      2021Q3: $   4,991 (Q P&L $-108, size $1,250)
+      2021Q4: $   5,679 (Q P&L $+689, size $1,250)
+      2022Q1: $   6,332 (Q P&L $+653, size $1,562)
+      2023Q1: $   6,204 (Q P&L $-128, size $1,952)
+  [1s] [34m20s]
+
+======================================================================
+DIAGNOSTICS
+======================================================================
+
+  STAGED ENTRY (enter after 2% drop in 5d):
+    Immediate: n=66 win=68% avg=$+0.09/sh
+    Confirmed: n=44 win=89% avg=$+1.95/sh (missed 22)
+
+  SPY MONTHLY CORRELATION: -0.39
+    → Useful portfolio hedge
+
+  EARNINGS PROXIMITY:
+    Downloading earnings dates for 17 tickers...
+    Got dates for 0 tickers
+    No earnings dates available
+  [1s] [34m22s]
+
+
+  HOLDOUT (Full SimFin):
+    voladj_2sig_10d: events pos=219 neg=9423 nan=1326
+    voladj_2sig_10d: Dev=0.919 Hold=0.583 [0.545,0.621]
+    exdrop_15_10d: events pos=405 neg=9237 nan=1326
+    exdrop_15_10d: Dev=0.811 Hold=0.359 [0.327,0.389] <-- TRADING
+
+######################################################################
+# UNIVERSE B: S&P 400+600 Index
+######################################################################
+  S&P index: 971 tickers from static files
+  S&P index: 971 tickers
+  Overlap with feature data: 796/971
+  Overlap with price cache: 797/971
+======================================================================
+PIPELINE: S&P 400+600
+  796 tickers | 20,547 dev + 2,952 holdout rows
+======================================================================
+VULNERABILITY MODEL...
+
+  RESULTS:
+    EXCESS:
+      exdrop_10_5d                   AUC:0.760 [0.721,0.790] BR:6%
+      exdrop_15_10d                  AUC:0.754 [0.709,0.786] BR:7%
+      exdrop_10_10d                  AUC:0.745 [0.713,0.765] BR:13%
+      exdrop_15_5d                   AUC:0.731 [0.650,0.818] BR:2%
+      exdrop_15_42d                  AUC:0.694 [0.665,0.710] BR:24%
+    VOL-ADJ:
+      voladj_2sig_10d                AUC:0.923 [0.901,0.941] BR:13% ◄
+      voladj_2sig_5d                 AUC:0.921 [0.897,0.941] BR:13%
+      voladj_1sig_5d                 AUC:0.854 [0.827,0.882] BR:23%
+      voladj_1sig_10d                AUC:0.853 [0.823,0.876] BR:24%
+      voladj_2sig_63d                AUC:0.670 [0.548,0.764] BR:2%
+    RAW:
+      drop_5_10d                     AUC:0.812 [0.780,0.841] BR:34%
+      drop_5_63d                     AUC:0.663 [0.622,0.701] BR:39%
+      drop_5_42d                     AUC:0.661 [0.622,0.704] BR:37%
+  BEST: voladj_2sig_10d | 0.923 | K=10
+  Features: ['log_revenue', 'capex_to_revenue', 'dollar_volume', 'max_dd_63d', 'mom_21d', 'vol_30d', 'vol_ratio_30_60', 'liab_to_assets', 'accruals', 'book_to_price']
+
+  LOCKED CONFIG: exdrop_15_10d / 21d hold / confirmed entry
+  (All targets trained for diagnostics. Only TRADING_TARGET used for walk-forward.)
+
+  FUND-ONLY on exdrop_10_5d: 0.730 vs full 0.760
+  PURE-FUND on voladj_2sig_10d: 0.921 vs full 0.923
+    ✅ Real fundamental distress signal
+
+  TRUNCATED HOLDOUT TEST:
+    Full-dev holdout:  0.503
+    Trunc-dev holdout: 0.509
+    (If similar → no leakage. If trunc is lower → sampling variation in full holdout)
+
+  Flagged: 127 | [36m18s]
+
+======================================================================
+WALK-FORWARD: exdrop_15_10d / 21d hold / confirmed entry
+======================================================================
+
+  Target: exdrop_15_10d (AUC=0.754)
+  Hold: 21d | Entry: confirmed (2% in 5d)
+  Borrow: 3% (easy, vol>=1M) / 6% (hard, vol<1M)
+
+  Tier          n   Win   Raw$/sh  Borw$/sh   Net$/sh    Net%  Stops
+  ------------------------------------------------------------
+  Top 10%      16   75% $  +1.73 $   0.05 $  +1.67   +6.6%   44%
+  Top 25%      40   80% $  +2.29 $   0.09 $  +2.21   +6.7%   38%
+  Top 50%      80   76% $  +2.35 $   0.09 $  +2.26   +5.3%   38%
+  Full        159   70% $  +1.99 $   0.10 $  +1.88   +4.1%   39%
+
+  TOP 25% BY QUARTER (40 trades):
+    2021Q4: n=  5 win=100% raw=$+6.21 borrow=$0.10 net=$+6.11/sh
+    2022Q1: n=  5 win=100% raw=$+3.65 borrow=$0.07 net=$+3.58/sh
+    2022Q3: n=  2 win=50% raw=$-1.16 borrow=$0.16 net=$-1.31/sh
+    2022Q4: n=  3 win=67% raw=$+0.79 borrow=$0.03 net=$+0.76/sh
+    2023Q1: n=  3 win=67% raw=$+4.26 borrow=$0.08 net=$+4.19/sh
+    2023Q3: n=  4 win=75% raw=$+0.50 borrow=$0.08 net=$+0.41/sh
+    2023Q4: n=  6 win=83% raw=$-0.36 borrow=$0.07 net=$-0.44/sh
+    2024Q1: n= 10 win=70% raw=$+2.12 borrow=$0.06 net=$+2.07/sh
+
+  Profitable quarters: 8/10
+  Trades: 159 total, 40 top-25%
+  [4s] [36m22s]
+
+======================================================================
+EQUITY CURVES + DYNAMIC REGIME
+======================================================================
+  REGIME DIAGNOSTIC (when would triggers fire?):
+    2022Q3 @ 3%: triggers day 12 (2022-07-20)
+    2022Q3 @ 4%: triggers day 17 (2022-07-27)
+    2022Q3 @ 5%: triggers day 17 (2022-07-27)
+
+  ACCOUNT SCENARIOS (top-25% trades, +4% regime check):
+    Conservative   $10,000→$  13,670 (+37%) DD=$   -223 (-2%) Cal=8.05 trades=40
+    Moderate       $25,000→$  34,292 (+37%) DD=$ -1,356 (-4%) Cal=3.40 trades=40
+    Aggressive     $50,000→$  68,632 (+37%) DD=$ -2,723 (-4%) Cal=3.39 trades=40
+
+  RAMP-UP ($5K start, scale 25% after profitable Q):
+    Start: $5,000 | End: $7,039 (+41%)
+    Position size: $1,000 → $5,000
+    Trades: 40
+      2021Q2: $   5,070 (Q P&L $+70, size $1,000)
+      2021Q3: $   5,082 (Q P&L $+12, size $1,250)
+      2021Q4: $   5,554 (Q P&L $+472, size $1,562)
+      2022Q1: $   6,012 (Q P&L $+457, size $1,952)
+      2022Q3: $   5,943 (Q P&L $-69, size $2,440)
+      2022Q4: $   6,004 (Q P&L $+61, size $2,440)
+      2023Q1: $   6,147 (Q P&L $+142, size $3,050)
+      2023Q3: $   6,205 (Q P&L $+59, size $3,812)
+      2023Q4: $   6,423 (Q P&L $+217, size $4,765)
+      2024Q1: $   7,039 (Q P&L $+616, size $5,000)
+  [4s] [36m26s]
+
+======================================================================
+DIAGNOSTICS
+======================================================================
+
+  TECH-ONLY: 18 trades → $31,359 (+25%) DD=-2% Cal=5.22
+
+  STAGED ENTRY (enter after 2% drop in 5d):
+    Immediate: n=159 win=70% avg=$+1.88/sh
+    Confirmed: n=96 win=82% avg=$+2.99/sh (missed 63)
+
+  SPY MONTHLY CORRELATION: -0.34
+    → Useful portfolio hedge
+
+  EARNINGS PROXIMITY:
+    Downloading earnings dates for 26 tickers...
+    Got dates for 0 tickers
+    No earnings dates available
+  [2s] [36m28s]
+
+
+  HOLDOUT (S&P 400+600):
+    voladj_2sig_10d: events pos=63 neg=2889 nan=449
+    voladj_2sig_10d: Dev=0.923 Hold=0.503 [0.428,0.568]
+    exdrop_15_10d: events pos=59 neg=2893 nan=449
+    exdrop_15_10d: Dev=0.754 Hold=0.433 [0.360,0.501] <-- TRADING
+
+  Time check: 37 min elapsed
+
+  ═══ BAYESIAN OPTIMIZATION ═══
+  Target: exdrop_15_10d | Features: 10 | Trials: 30
+  Trials completed: 30
+  Best AUC: 0.819
+  Best XGB weight: 0.48
+  Best XGB: depth=4, lr=0.021, n_est=234
+  Best LGB: depth=4, lr=0.048, n_est=224
+  Baseline dev AUC (fixed params): 0.811
+  Optimized AUC: 0.819
+  Improvement: +0.007
+  ═══ END BAYESIAN OPTIMIZATION ═══
+
+  Optuna improvement marginal (-0.100) — keeping default params
+
+  ═══ CONFIDENCE INTERVALS (Bootstrap, n=1000) ═══
+  Win rate: 82.6% [64.7%, 100.0%]
+  Avg P&L: $-1.02 [$-8.34, $3.24]
+  ═══ END BOOTSTRAP CIs ═══
+
+
+======================================================================
+VOLADJ COLLAPSE DIAGNOSTIC
+======================================================================
+
+  Test 1 -- Truncation: 6799 full 63d window, 2843 truncated
+    ⚠️ 29% truncated -- this likely explains the low holdout AUC
+
+  Test 2 -- 252d vol threshold:
+
+  VOLADJ DIAGNOSTIC ERROR: float() argument must be a string or a real number, not 'Series'
+
+======================================================================
+HEAD-TO-HEAD COMPARISON
+======================================================================
+
+  Universe              Tickers   DevAUC  WF Trades  Top25%Win  Top25%P&L  Stops
+  ---------------------------------------------------------------------------
+  Full SimFin              3089    0.811         66        82%     $-1.19    44%
+  S&P 400+600               796    0.754        159        80%     $+2.21    39%
+  ---------------------------------------------------------------------------
+
+██████████████████████████████████████████████████████████████████████
+  DROP SCORE v18 — FULL RESULTS
+██████████████████████████████████████████████████████████████████████
+
+DATA: 3096 stocks | 50,540 dev + 9,642 hold
+VULN: voladj_2sig_10d Dev=0.919 [0.902,0.932]
+TRADING: exdrop_15_10d Hold=0.359 (holdout on trading target)
+Features: ['log_revenue', 'capex_to_revenue', 'dollar_volume', 'filing_delay_days', 'vol_ratio_30_60', 'mom_21d', 'vol_30d', 'liab_to_assets', 'accruals', 'fcf_margin']
+VOL-ADJUSTED: voladj_2sig_10d AUC=0.919
+
+WALK-FORWARD: 66 trades (confirmed entry, 21d hold, vol floor 500,000)
+  Full:    win=68% avg=$+0.09/sh (+4.4%) stops=44%
+  Top 25%: win=82% avg=$-1.19/sh (+9.5%) stops=35%
+  Quarters: 3/5 profitable
+  Borrow: avg $0.04/sh total $3
+
+  Conservative: $10,000→$12,042 (+20%) DD=-3% Calmar=4.19
+  Moderate: $25,000→$30,019 (+20%) DD=-3% Calmar=3.86
+  Aggressive: $50,000→$60,069 (+20%) DD=-3% Calmar=3.87
+
+VERDICT:
+  Signal: ✅ Dev=0.919 Hold=0.359 VolAdj=0.919
+  Alpha: ⚠️
+  Conviction: Top 25% outperforms → trade only highest-scored picks
+  Config: exdrop_15_10d / 21d / confirmed
+
+FIRST 20 TRADES (top-25% conviction):
+  HYSR   2021-07-01 $     0→$     0 PT   $+0.01/sh (+14.9%) borrow=$0.00
+  AEHR   2021-09-01 $     7→$     8 STOP $-1.07/sh (-15.1%) borrow=$0.00
+  FULC   2021-10-04 $    27→$    24 STOP $+2.01/sh (+7.6%) borrow=$0.08
+  AMC    2021-10-04 $   368→$   424 STOP $-56.07/sh (-15.2%) borrow=$0.44
+  AUPH   2022-01-04 $    22→$    19 PT   $+3.41/sh (+15.3%) borrow=$0.01
+  BBIO   2022-01-04 $    16→$    14 PT   $+2.68/sh (+16.4%) borrow=$0.01
+  ABUS   2022-01-04 $     4→$     3 PT   $+0.66/sh (+17.6%) borrow=$0.00
+  ESPR   2022-01-05 $     5→$     4 PT   $+0.73/sh (+15.3%) borrow=$0.00
+  ALDX   2022-01-05 $     4→$     3 PT   $+0.65/sh (+16.5%) borrow=$0.01
+  CABA   2022-01-07 $     3→$     3 PT   $+0.62/sh (+17.8%) borrow=$0.00
+  APPS   2022-04-05 $    43→$    36 PT   $+6.77/sh (+15.8%) borrow=$0.04
+  CFLT   2022-04-06 $    40→$    32 PT   $+7.46/sh (+18.7%) borrow=$0.06
+  IONQ   2022-04-06 $    12→$    11 STOP $+0.92/sh (+7.5%) borrow=$0.01
+  AGL    2022-04-06 $    25→$    19 PT   $+5.14/sh (+20.8%) borrow=$0.03
+  GDRX   2022-04-06 $    19→$    16 PT   $+3.06/sh (+16.4%) borrow=$0.03
+  BEAM   2022-04-06 $    55→$    52 STOP $+3.22/sh (+5.9%) borrow=$0.07
+  CIFR   2023-04-05 $     2→$     3 STOP $-0.34/sh (-15.2%) borrow=$0.00
+
+======================================================================
+QA CHECKLIST
+======================================================================
+  [PASS] EDGAR tickers in feature pipeline
+  [PASS] S&P coverage > 400
+  [PASS] No inf in features
+  [PASS] No duplicate rows
+  [PASS] WF includes EDGAR-sourced trades
+  [FAIL] gross_margin null < 30%
+  [PASS] operating_margin null < 30%
+  [PASS] cfo_to_revenue null < 40%
+  [PASS] fcf_margin null < 40%
+  [PASS] Bayesian opt completed
+  [PASS] Bootstrap CIs computed
+======================================================================
+
+Total: 37.0 min
+Drop Score v18.2 complete.
+
+Log saved to results/run_2026-03-29_005255.txt
