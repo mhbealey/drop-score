@@ -40,6 +40,13 @@ jobs:
             drop-score-data-v3-
             drop-score-data-
 
+      - name: Restore SimFin cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.simfin/
+          key: simfin-weekly-${{ github.run_number }}
+          restore-keys: simfin-weekly-
+
       - name: Install dependencies
         run: |
           pip install --upgrade pip
