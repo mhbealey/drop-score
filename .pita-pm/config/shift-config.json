@@ -1,0 +1,77 @@
+{
+  "version": "1.0.0",
+  "project_name": "Drop Score v18.3",
+  "language": "python",
+
+  "shift": {
+    "on_hours": 8,
+    "off_hours": 16,
+    "scan_interval_minutes": 30,
+    "timezone": "UTC"
+  },
+
+  "scanner": {
+    "max_function_lines": 50,
+    "max_file_lines": 300,
+    "ignore_patterns": [
+      "*.pyc", "__pycache__", ".git", "node_modules",
+      ".pita-pm/data/*", ".pita-pm/reports/*", "*.pkl", "*.db"
+    ],
+    "scan_extensions": [".py"],
+    "severity_weights": {
+      "print_statement": 2,
+      "broad_exception": 3,
+      "magic_number": 1,
+      "long_function": 4,
+      "long_file": 2,
+      "missing_type_hint": 1,
+      "missing_test": 5,
+      "missing_docstring": 1,
+      "todo_without_ticket": 2,
+      "bare_assert": 3,
+      "pickle_trust": 4,
+      "star_import": 3,
+      "mutable_default": 5
+    }
+  },
+
+  "personality": {
+    "humor_style": "late_night_monologue",
+    "escalation_thresholds": {
+      "gentle": [1, 2],
+      "pointed": [3, 6],
+      "existential": [7, null]
+    },
+    "catchphrases": [
+      "I'm not mad. I'm just... aware.",
+      "This is fine. Everything is fine. The tests will catch it. Oh wait.",
+      "I've seen this before. It didn't end well then either.",
+      "Future you is going to send present you a very stern email about this.",
+      "That's not a function. That's a short story with arguments."
+    ],
+    "celebration_reluctance": 0.7,
+    "sarcasm_ceiling": 0.85,
+    "compassion_floor": 0.3
+  },
+
+  "market_crawler": {
+    "enabled": true,
+    "sources": ["google_finance", "duckduckgo_news"],
+    "sectors": ["tech", "finance", "energy", "healthcare", "consumer", "industrial"],
+    "crawl_interval_minutes": 60,
+    "max_articles_per_crawl": 50,
+    "sentiment_model": "keyword_heuristic",
+    "risk_flag_threshold": -0.3
+  },
+
+  "database": {
+    "path": ".pita-pm/data/market-intel.db",
+    "max_size_mb": 100,
+    "retention_days": 90
+  },
+
+  "known_sins": {
+    "description": "Populated at runtime. Maps issue_type -> {count, first_seen, last_file, escalation_tier}",
+    "file": ".pita-pm/data/sin-ledger.json"
+  }
+}

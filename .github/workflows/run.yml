@@ -19,9 +19,49 @@ env:
 
 jobs:
   # ─────────────────────────────────────────
+  # STAGE 0: PITA-PM Quality Gate
+  # ─────────────────────────────────────────
+  quality-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: PITA-PM Vibe Check
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, '.pita-pm')
+          from src.scanner import scan_codebase
+          from src.personality import vibe_check
+          report = scan_codebase('.')
+          vibe = report.vibe_score
+          label, quip = vibe_check(vibe)
+          print('=' * 60)
+          print('PITA-PM QUALITY GATE')
+          print('=' * 60)
+          print(f'  Vibe: {vibe:.0f}/100 — {label}')
+          print(f'  {quip}')
+          print(f'  Issues: {report.total_issues} across {report.files_scanned} files')
+          for t, c in sorted(report.by_type.items(), key=lambda x: -x[1])[:5]:
+              print(f'    {t}: {c}')
+          print('=' * 60)
+          # Gate threshold: 30 (generous — we have known debt)
+          if vibe < 30:
+              print('GATE: FAILED — code quality below minimum threshold')
+              sys.exit(1)
+          print('GATE: PASSED')
+          "
+
+  # ─────────────────────────────────────────
   # STAGE 1: Data Pipeline (~2 min cached, ~20 min cold)
   # ─────────────────────────────────────────
   data:
+    needs: quality-gate
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

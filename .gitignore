@@ -6,3 +6,7 @@ plots/
 data/
 results/
 !results/latest.txt
+
+# PITA-PM runtime data
+.pita-pm/data/
+.pita-pm/reports/
