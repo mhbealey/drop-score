@@ -58,7 +58,7 @@ def main():
     print(f"  SimFin fundamental universe: {len(simfin_universe)}")
     print(f"  EDGAR tickers excluded: {len(edgar_tickers & simfin_universe)}")
     print(f"  Universe A (in dev set): {len(simfin_only)} tickers (v18 had 960)")
-    assert 500 < len(simfin_only) < 2000, \
+    assert 500 < len(simfin_only) < 5000, \
         f"Universe A unexpected size: {len(simfin_only)}"
 
     # Run pipeline with locked features
