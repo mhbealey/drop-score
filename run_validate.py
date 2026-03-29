@@ -101,7 +101,7 @@ def main():
     checks = [
         ('Dev AUC', m['dev_auc'], V18['dev_auc'] - 0.05),
         ('Hold AUC', m['hold_auc'], V18['hold_auc'] - 0.10),
-        ('Trade count', m['top25_trades'], V18['top25_trades'] * 0.5),
+        ('Trade count', m['top25_trades'], 15),  # at least 15 top-25% trades
     ]
 
     for name, actual, minimum in checks:
