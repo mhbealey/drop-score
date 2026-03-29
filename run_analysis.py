@@ -200,18 +200,31 @@ def test0_extend_backtest(data):
         log.info("  WARNING: Could not fetch extended SPY")
 
     # --- Step 4: Merge into combined dataset ---
+    def _dedup_index(df):
+        """Drop duplicate index entries from a DataFrame or Series."""
+        if hasattr(df, 'index') and df.index.duplicated().any():
+            return df[~df.index.duplicated(keep='last')]
+        return df
+
     full_price_dict = dict(existing_price_dict)
     for tk in extended_prices:
         if tk in full_price_dict:
-            combined = pd.concat([extended_prices[tk], full_price_dict[tk]])
+            ext_px = _dedup_index(extended_prices[tk])
+            cur_px = _dedup_index(full_price_dict[tk])
+            combined = pd.concat([ext_px, cur_px])
             combined = combined[~combined.index.duplicated(keep='last')].sort_index()
             full_price_dict[tk] = combined
         else:
-            full_price_dict[tk] = extended_prices[tk]
+            full_price_dict[tk] = _dedup_index(extended_prices[tk])
+
+    # Deduplicate all existing prices too (some have duplicate dates from yFinance)
+    for tk in list(full_price_dict.keys()):
+        full_price_dict[tk] = _dedup_index(full_price_dict[tk])
 
     # Merge SPY
-    existing_spy = data['spy_close']
+    existing_spy = _dedup_index(data['spy_close'])
     if len(spy_ext) > 0:
+        spy_ext = _dedup_index(spy_ext)
         full_spy = pd.concat([spy_ext, existing_spy])
         full_spy = full_spy[~full_spy.index.duplicated(keep='last')].sort_index()
     else:
