@@ -423,8 +423,14 @@ def build_features_from_scratch(data_bundle):
     print(f"  After filtering: {len(df_q):,} rows, {df_q['ticker'].nunique()} tickers")
 
     # === Dev / Holdout split ===
-    # Use 95th percentile date (not max) to avoid EDGAR outlier dates skewing cutoff
-    cutoff_anchor = df_q['report_date'].quantile(0.95)
+    # Anchor cutoff to SimFin's max date (not combined), so EDGAR doesn't shift it
+    simfin_max_date = data_bundle.get('simfin_max_date')
+    if simfin_max_date is not None:
+        cutoff_anchor = pd.Timestamp(simfin_max_date)
+        print(f"  Cutoff anchor: SimFin max date {cutoff_anchor.date()}")
+    else:
+        cutoff_anchor = df_q['report_date'].quantile(0.95)
+        print(f"  Cutoff anchor: 95th percentile {cutoff_anchor.date()}")
     cutoff = cutoff_anchor - pd.DateOffset(months=HOLDOUT_MO)
     df_dev = df_q[df_q['report_date'] < cutoff].copy().reset_index(drop=True)
     df_hold = df_q[df_q['report_date'] >= cutoff].copy().reset_index(drop=True)

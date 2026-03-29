@@ -299,6 +299,9 @@ def run_vulnerability_model(data_bundle):
     """
     Full vulnerability model pipeline: Pareto, train, fundamental tests,
     score, truncated holdout.
+
+    If 'locked_features' is set in the bundle, skip Pareto and use those
+    features directly (locked v18 config).
     """
     df_dev = data_bundle['df_dev']
     df_hold = data_bundle['df_hold']
@@ -307,12 +310,33 @@ def run_vulnerability_model(data_bundle):
     tcols = data_bundle['tcols']
     tgt_rates = data_bundle['tgt_rates']
     optuna_params = data_bundle.get('optuna_best_params')
+    locked_features = data_bundle.get('locked_features')
 
-    K = pareto_optimise(df_dev, fcols_q, fill_meds_q, tcols)
+    if locked_features:
+        # Use locked feature set — skip Pareto optimization
+        # Filter to features that actually exist in dev data
+        available = [f for f in locked_features if f in fcols_q]
+        missing = [f for f in locked_features if f not in fcols_q]
+        if missing:
+            print(f"  WARNING: locked features not in data: {missing}")
+        K = len(available)
+        print(f"  Using locked features (K={K}): {available}")
+    else:
+        K = pareto_optimise(df_dev, fcols_q, fill_meds_q, tcols)
+
     v_results, best_v_t, best_v_r, topf_v = train_all_targets(
         df_dev, fcols_q, fill_meds_q, tcols, tgt_rates, K,
         optuna_params=optuna_params,
     )
+
+    # If locked features, override topf_v with locked list
+    if locked_features:
+        available = [f for f in locked_features if f in fcols_q]
+        topf_v = available
+        # Also override best_v_r's features to use locked set
+        if TRADING_TARGET in v_results:
+            best_v_t = TRADING_TARGET
+            best_v_r = v_results[TRADING_TARGET]
 
     fundamental_only_tests(df_dev, fcols_q, fill_meds_q, v_results, best_v_t, K)
     df_dev, df_hold, Xh = score_dev_holdout(

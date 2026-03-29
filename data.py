@@ -73,7 +73,7 @@ def save_cache(cache, cache_path):
 
 def load_intermediates(cache_dir, force_recompute=False):
     """Load cached feature-engineering intermediates if available."""
-    intermediates_path = os.path.join(cache_dir, 'v14_intermediates.pkl')
+    intermediates_path = os.path.join(cache_dir, 'v15_intermediates.pkl')
     intm_loaded = False
     df_q = df_dev = df_hold = df_daily = None
     if not force_recompute and os.path.exists(intermediates_path):
@@ -494,8 +494,12 @@ def load_all_data():
     df_inc, df_bal, df_cf = load_simfin(cache, cache_path)
     sector_map = load_sector_map(cache, cache_path)
 
-    # ── EDGAR: fill ALL fundamental gaps ──
+    # ── Track SimFin-only tickers BEFORE EDGAR merge ──
+    simfin_tickers_all = set(df_inc.index.get_level_values('Ticker').unique())
     simfin_universe = build_universe(df_inc, df_bal, df_cf, sector_map)
+    simfin_universe_set = set(simfin_universe)  # Pure SimFin universe (pre-EDGAR)
+    # Capture SimFin's max report date BEFORE EDGAR merge (for holdout cutoff)
+    simfin_max_date = df_inc.index.get_level_values('Report Date').max()
     sp_tickers = get_sp_index_tickers()
 
     simfin_tickers_with_data = set(
@@ -594,6 +598,8 @@ def load_all_data():
         df_inc=df_inc, df_bal=df_bal, df_cf=df_cf,
         sector_map=sector_map,
         universe=training_universe,
+        simfin_universe=sorted(simfin_universe_set),
+        simfin_max_date=simfin_max_date,
         tradeable_tickers=tradeable_tickers,
         price_dict=price_dict, unavail=unavail,
         spy_close=spy_close, spy_ret=spy_ret,

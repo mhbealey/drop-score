@@ -375,7 +375,13 @@ def _save_raw_json_cache(raw_cache, cache_dir='data/'):
 
 
 def load_edgar_cache(cache_dir='data/'):
-    """Load cached EDGAR parsed data. Re-parses if mapping version changed."""
+    """Load cached EDGAR parsed data. Re-parses from raw JSON if mapping version changed.
+
+    Priority:
+    1. If mapping version matches → load parsed cache directly
+    2. If version stale + raw JSON exists → re-parse from raw JSON (no re-download)
+    3. If version stale + no raw JSON → load stale parsed data anyway (better than nothing)
+    """
     parsed_path = os.path.join(cache_dir, 'edgar_fundamentals.pkl')
     version_path = os.path.join(cache_dir, 'edgar_mapping_version.txt')
 
@@ -387,33 +393,46 @@ def load_edgar_cache(cache_dir='data/'):
         except Exception:
             pass
 
-    if cached_version < _MAPPING_VERSION:
-        raw_cache = _load_raw_json_cache(cache_dir)
-        if raw_cache:
-            print(f"  EDGAR: re-parsing {len(raw_cache)} cached tickers "
-                  f"(mapping v{cached_version} -> v{_MAPPING_VERSION})")
-            all_data = {}
-            for ticker, facts_json in raw_cache.items():
-                quarterly = parse_edgar_facts(facts_json, ticker)
-                if quarterly:
-                    all_data.update(quarterly)
-            save_edgar_cache(all_data, cache_dir)
-            unique = len({k[0] for k in all_data})
-            print(f"  EDGAR: re-parsed {unique} tickers, {len(all_data)} quarters")
-            return all_data
-        else:
-            # No raw JSON cache — old parsed data was built with buggy mapping.
-            # Discard it so tickers get re-fetched from EDGAR.
-            print(f"  EDGAR: discarding stale cache (mapping v{cached_version}, "
-                  f"need v{_MAPPING_VERSION}, no raw JSON to re-parse)")
-            return {}
+    if cached_version >= _MAPPING_VERSION:
+        # Version matches — load parsed cache directly
+        if os.path.exists(parsed_path):
+            try:
+                with open(parsed_path, 'rb') as f:
+                    data = pickle.load(f)
+                unique = len({k[0] for k in data})
+                print(f"  EDGAR: {unique} tickers from parsed cache (v{cached_version})")
+                return data
+            except Exception:
+                pass
+        return {}
 
+    # Version stale — try to re-parse from raw JSON
+    raw_cache = _load_raw_json_cache(cache_dir)
+    if raw_cache:
+        print(f"  EDGAR: re-parsing {len(raw_cache)} cached tickers "
+              f"(mapping v{cached_version} -> v{_MAPPING_VERSION})")
+        all_data = {}
+        for ticker, facts_json in raw_cache.items():
+            quarterly = parse_edgar_facts(facts_json, ticker)
+            if quarterly:
+                all_data.update(quarterly)
+        save_edgar_cache(all_data, cache_dir)
+        unique = len({k[0] for k in all_data})
+        print(f"  EDGAR: re-parsed {unique} tickers, {len(all_data)} quarters")
+        return all_data
+
+    # No raw JSON — fall back to stale parsed data (better than re-downloading)
     if os.path.exists(parsed_path):
         try:
             with open(parsed_path, 'rb') as f:
-                return pickle.load(f)
+                data = pickle.load(f)
+            unique = len({k[0] for k in data})
+            print(f"  EDGAR: using stale parsed cache ({unique} tickers, "
+                  f"v{cached_version}); will save raw JSON on next fetch")
+            return data
         except Exception:
             pass
+
     return {}
 
 
@@ -436,13 +455,16 @@ def fetch_edgar_fundamentals(tickers_to_fetch, cik_map, cache_dir='data/'):
     """
     all_data = load_edgar_cache(cache_dir)
     raw_cache = _load_raw_json_cache(cache_dir)
+
+    # A ticker is "already fetched" if we have its raw JSON OR its parsed data
     already_fetched = set(raw_cache.keys()) | {k[0] for k in all_data}
 
     to_fetch = [t for t in tickers_to_fetch
                 if t in cik_map and t not in already_fetched]
 
     if not to_fetch:
-        print(f"  EDGAR: {len(already_fetched)} cached, 0 to fetch")
+        print(f"  EDGAR: {len(already_fetched)} cached ({len(raw_cache)} raw JSON), "
+              f"0 to fetch")
         return all_data
 
     print(f"  EDGAR: {len(already_fetched)} cached, {len(to_fetch)} to fetch")

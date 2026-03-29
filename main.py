@@ -50,6 +50,7 @@ from config import (
     TRADING_TARGET, TRADING_HOLD, ENTRY_MODE,
     BORROW_RATE_EASY, BORROW_RATE_HARD,
     UNIVERSE_MODE, SECTOR_ETFS,
+    UNIVERSE_A_FEATURES, UNIVERSE_B_FEATURES,
 )
 from utils import elapsed, clean_X, to_scalar, ensure_series
 from data import load_all_data, get_sp_index_tickers
@@ -63,9 +64,11 @@ from edgar import run_feature_qa
 # BANNER
 # ═══════════════════════════════════════════════════════════════
 print("=" * 70)
-print("DROP SCORE v18 — LOCKED CONFIG + DUAL UNIVERSE + BORROW COSTS")
+print("DROP SCORE v18.3 — LOCKED CONFIG + SEPARATED UNIVERSES + BORROW COSTS")
 print(f"  Target: {TRADING_TARGET} | Hold: {TRADING_HOLD}d | Entry: {ENTRY_MODE}")
 print(f"  Borrow: {BORROW_RATE_EASY:.0%}/{BORROW_RATE_HARD:.0%} | Universe: {UNIVERSE_MODE}")
+print(f"  Universe A features: {UNIVERSE_A_FEATURES}")
+print(f"  Universe B features: {UNIVERSE_B_FEATURES}")
 print("=" * 70)
 
 # ═══════════════════════════════════════════════════════════════
@@ -201,11 +204,18 @@ def holdout_eval(bundle, label):
 pipeline_results = {}
 
 if UNIVERSE_MODE in ("full", "both"):
-    # Universe A: full SimFin universe
+    # Universe A: SimFin-ONLY tickers (no EDGAR contamination)
     print("\n" + "#" * 70)
-    print("# UNIVERSE A: Full SimFin")
+    print("# UNIVERSE A: Full SimFin (SimFin-only, locked features)")
     print("#" * 70)
-    result_a = run_pipeline(data, "Full SimFin")
+    simfin_universe = set(data.get('simfin_universe', []))
+    all_tickers_a = set(data['df_dev']['ticker'].unique())
+    simfin_only = simfin_universe & all_tickers_a
+    print(f"  SimFin universe: {len(simfin_universe)} tickers")
+    print(f"  Overlap with feature data: {len(simfin_only)}")
+    data_a = dict(data)
+    data_a['locked_features'] = UNIVERSE_A_FEATURES
+    result_a = run_pipeline(data_a, "Full SimFin", ticker_subset=simfin_only)
     ho_a = holdout_eval(result_a, "Full SimFin")
     pipeline_results['Full SimFin'] = result_a
     t_a = time.time() - t_start
@@ -217,7 +227,7 @@ if UNIVERSE_MODE in ("sp_index", "both"):
         print(f"\n  TIME BUDGET: {elapsed_min:.0f} min elapsed (>40), skipping S&P index pipeline")
     else:
         print("\n" + "#" * 70)
-        print("# UNIVERSE B: S&P 400+600 Index")
+        print("# UNIVERSE B: S&P 400+600 Index (SimFin + EDGAR, locked features)")
         print("#" * 70)
         sp_tickers = get_sp_index_tickers()
         if sp_tickers:
@@ -231,21 +241,13 @@ if UNIVERSE_MODE in ("sp_index", "both"):
             print(f"  Overlap with price cache: {len(price_overlap)}/{len(sp_tickers)}")
             if len(sp_overlap) < 200:
                 print(f"  WARNING: low overlap ({len(sp_overlap)} tickers), running anyway")
-            result_b = run_pipeline(data, "S&P 400+600", ticker_subset=sp_overlap)
+            data_b = dict(data)
+            data_b['locked_features'] = UNIVERSE_B_FEATURES
+            result_b = run_pipeline(data_b, "S&P 400+600", ticker_subset=sp_overlap)
             ho_b = holdout_eval(result_b, "S&P 400+600")
             pipeline_results['S&P 400+600'] = result_b
         else:
             print("  Could not get S&P index tickers, skipping")
-
-# If only one mode requested
-if UNIVERSE_MODE == "full" and 'Full SimFin' not in pipeline_results:
-    result_a = run_pipeline(data, "Full SimFin")
-    ho_a = holdout_eval(result_a, "Full SimFin")
-    pipeline_results['Full SimFin'] = result_a
-
-if UNIVERSE_MODE == "sp_index" and 'S&P 400+600' not in pipeline_results:
-    # Already handled above
-    pass
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -470,12 +472,106 @@ if _diag_label:
 
 
 # ═══════════════════════════════════════════════════════════════
-# 4. HEAD-TO-HEAD COMPARISON (if both universes ran)
+# 4. V18 vs V18.3 COMPARISON TABLE
 # ═══════════════════════════════════════════════════════════════
 print("\n" + "=" * 70)
-print("HEAD-TO-HEAD COMPARISON")
+print("V18 vs V18.3 COMPARISON")
 print("=" * 70)
 
+def _get_metrics(res, tier='top25'):
+    """Extract metrics from a pipeline result."""
+    n_tk = res['df_dev']['ticker'].nunique()
+    dev_auc = res['v_results'].get(TRADING_TARGET, {}).get('mauc', np.nan)
+    wf = res.get('wf_df', pd.DataFrame())
+    wf_top = res.get('wf_top', pd.DataFrame())
+
+    # Holdout AUC
+    hold_auc = np.nan
+    df_hold = res.get('df_hold', pd.DataFrame())
+    if (TRADING_TARGET in df_hold.columns
+            and df_hold[TRADING_TARGET].sum() >= 10
+            and 'vuln_score' in df_hold.columns):
+        try:
+            yh = df_hold[TRADING_TARGET].fillna(0).astype(int)
+            hp = df_hold['vuln_score'].values
+            valid = ~np.isnan(hp)
+            if valid.sum() >= 20 and yh[valid].sum() >= 5:
+                hold_auc = roc_auc_score(yh[valid], hp[valid])
+        except Exception:
+            pass
+
+    # Top 25% metrics
+    if len(wf_top) > 0:
+        t25_trades = len(wf_top)
+        t25_win = (wf_top['pnl_per_share'] > 0).mean()
+        t25_pnl = wf_top['pnl_per_share'].mean()
+    else:
+        t25_trades = t25_win = t25_pnl = np.nan
+
+    # Top 10% metrics
+    if len(wf) > 0 and 'wf_score' in wf.columns:
+        t10_cutoff = wf['wf_score'].quantile(0.90)
+        wf_t10 = wf[wf['wf_score'] >= t10_cutoff]
+        if len(wf_t10) > 0:
+            t10_trades = len(wf_t10)
+            t10_win = (wf_t10['pnl_per_share'] > 0).mean()
+            t10_pnl = wf_t10['pnl_per_share'].mean()
+        else:
+            t10_trades = t10_win = t10_pnl = np.nan
+    else:
+        t10_trades = t10_win = t10_pnl = np.nan
+
+    return {
+        'tickers': n_tk, 'dev_auc': dev_auc, 'hold_auc': hold_auc,
+        't25_trades': t25_trades, 't25_win': t25_win, 't25_pnl': t25_pnl,
+        't10_trades': t10_trades, 't10_win': t10_win, 't10_pnl': t10_pnl,
+    }
+
+def _fmt(val, fmt_str='.3f'):
+    if pd.isna(val): return 'N/A'
+    return f"{val:{fmt_str}}"
+
+# V18 benchmarks
+v18_a = {'tickers': 960, 'dev_auc': 0.791, 'hold_auc': 0.777, 't25_trades': 75, 't25_win': 0.71, 't25_pnl': 1.98}
+v18_b = {'tickers': 231, 'dev_auc': 0.725, 'hold_auc': 0.718, 't10_trades': 35, 't10_win': 0.86, 't10_pnl': 3.06, 't25_trades': 75, 't25_win': 0.69, 't25_pnl': 1.14}
+
+res_a = _get_metrics(pipeline_results['Full SimFin']) if 'Full SimFin' in pipeline_results else {}
+res_b = _get_metrics(pipeline_results['S&P 400+600']) if 'S&P 400+600' in pipeline_results else {}
+
+print(f"\n  {'':30s} {'V18':>12s} {'V18.3':>12s}")
+print(f"  {'-'*56}")
+if res_a:
+    print(f"  {'Universe A tickers:':<30s} {v18_a['tickers']:>12} {res_a['tickers']:>12}")
+    print(f"  {'Universe A Dev AUC:':<30s} {v18_a['dev_auc']:>12.3f} {_fmt(res_a['dev_auc']):>12s}")
+    print(f"  {'Universe A Hold AUC:':<30s} {v18_a['hold_auc']:>12.3f} {_fmt(res_a['hold_auc']):>12s}")
+    if pd.notna(res_a.get('t25_win')):
+        print(f"  {'Universe A Top-25%:':<30s} {'71%/$1.98':>12s} "
+              f"{res_a['t25_win']:.0%}/${_fmt(res_a['t25_pnl'], '.2f'):>12s}")
+if res_b:
+    print(f"  {'Universe B tickers:':<30s} {v18_b['tickers']:>12} {res_b['tickers']:>12}")
+    print(f"  {'Universe B Dev AUC:':<30s} {v18_b['dev_auc']:>12.3f} {_fmt(res_b['dev_auc']):>12s}")
+    print(f"  {'Universe B Hold AUC:':<30s} {v18_b['hold_auc']:>12.3f} {_fmt(res_b['hold_auc']):>12s}")
+    if pd.notna(res_b.get('t10_win')):
+        print(f"  {'Universe B Top-10%:':<30s} {'86%/$3.06':>12s} "
+              f"{res_b['t10_win']:.0%}/${_fmt(res_b['t10_pnl'], '.2f'):>12s}")
+    if pd.notna(res_b.get('t25_win')):
+        print(f"  {'Universe B Top-25%:':<30s} {'69%/$1.14':>12s} "
+              f"{res_b['t25_win']:.0%}/${_fmt(res_b['t25_pnl'], '.2f'):>12s}")
+print(f"  {'-'*56}")
+
+# V18 reproduction QA
+if res_a:
+    _a_dev = res_a.get('dev_auc', 0)
+    _a_hold = res_a.get('hold_auc', 0)
+    _a_t25 = res_a.get('t25_trades', 0)
+    if pd.notna(_a_dev) and abs(_a_dev - 0.791) >= 0.05:
+        print(f"  WARNING: Universe A dev AUC shifted: {_a_dev:.3f} (expected ~0.791)")
+    if pd.notna(_a_hold) and abs(_a_hold - 0.777) >= 0.10:
+        print(f"  WARNING: Universe A holdout AUC shifted: {_a_hold:.3f} (expected ~0.777)")
+    if pd.notna(_a_t25) and _a_t25 < 50:
+        print(f"  WARNING: Universe A trade count low: {_a_t25} (expected ~75)")
+
+# Also print standard head-to-head
 if len(pipeline_results) >= 2:
     print(f"\n  {'Universe':<20} {'Tickers':>8} {'DevAUC':>8} {'WF Trades':>10} "
           f"{'Top25%Win':>10} {'Top25%P&L':>10} {'Stops':>6}")
@@ -558,7 +654,7 @@ if primary_label:
     va_auc = v_results[bva]['mauc'] if bva else 0
 
     print("\n" + "\u2588" * 70)
-    print("  DROP SCORE v18 \u2014 FULL RESULTS")
+    print("  DROP SCORE v18.3 \u2014 FULL RESULTS")
     print("\u2588" * 70)
     print(f"""
 DATA: {df_q['ticker'].nunique() if 'ticker' in df_q.columns else df_dev['ticker'].nunique()} stocks | {len(df_dev):,} dev + {len(df_hold):,} hold
@@ -689,7 +785,7 @@ for _check, _passed in _checks.items():
 print("=" * 70)
 
 print(f"\nTotal: {(time.time()-t_start)/60:.1f} min")
-print("Drop Score v18.2 complete.")
+print("Drop Score v18.3 complete.")
 
 # Close log
 print(f"\nLog saved to {_log_path}")

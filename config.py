@@ -81,5 +81,17 @@ BORROW_RATE_HARD = 0.06            # 6% annual for avg_vol 500K-1M
 # ── Universe mode ──
 UNIVERSE_MODE = "both"             # "sp_index", "full", or "both"
 
+# ── Locked feature sets (from v18) ──
+UNIVERSE_A_FEATURES = [
+    'roa', 'eps', 'vol_60d', 'log_revenue', 'vol_30d',
+    'earnings_yield', 'cfo_to_revenue', 'gross_margin',
+    'cash_to_assets', 'sales_to_price',
+]
+UNIVERSE_B_FEATURES = [
+    'net_margin', 'rev_per_share', 'vol_60d', 'roe',
+    'nm_chg_4q', 'dilution', 'fcf_yield', 'vol_30d',
+    'max_dd_63d', 'book_to_price',
+]
+
 # ── Timing ──
 t_start = time.time()
