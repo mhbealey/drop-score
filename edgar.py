@@ -39,6 +39,7 @@ XBRL_TO_FIELD = {
         'CostOfGoodsAndServicesSold',
         'CostOfGoodsSold',
         'CostOfServices',
+        'CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization',
     ],
     'Gross Profit': [
         'GrossProfit',
@@ -209,7 +210,6 @@ def parse_edgar_facts(facts_json, ticker):
                 continue
 
             units = us_gaap[tag_name].get('units', {})
-            tag_added = False
 
             for unit_type in ['USD', 'shares']:
                 if unit_type not in units:
@@ -235,7 +235,6 @@ def parse_edgar_facts(facts_json, ticker):
                             quarterly_data[key] = {'filed': filed}
                         if simfin_field not in quarterly_data[key]:
                             quarterly_data[key][simfin_field] = val
-                            tag_added = True
                     else:
                         if not start:
                             continue
@@ -248,10 +247,10 @@ def parse_edgar_facts(facts_json, ticker):
                                 quarterly_data[key] = {'filed': filed}
                             if simfin_field not in quarterly_data[key]:
                                 quarterly_data[key][simfin_field] = val
-                                tag_added = True
 
-            if tag_added:
-                break  # Only break if we actually got data from this tag
+            # Do NOT break here — companies switch XBRL tags over time
+            # (e.g. 'Revenues' → 'RevenueFromContractWithCustomerExcludingAssessedTax')
+            # We need to check ALL tags to fill all quarters
 
     # Derive Gross Profit from Revenue - Cost of Revenue when not directly tagged
     for key, fields in quarterly_data.items():
@@ -351,7 +350,7 @@ def extract_filing_metadata(all_quarterly_data):
 # ═══════════════════════════════════════════════════════════════
 
 # Bump this when XBRL_TO_FIELD or parse logic changes to force re-parse
-_MAPPING_VERSION = 3
+_MAPPING_VERSION = 4
 
 
 def _load_raw_json_cache(cache_dir='data/'):
@@ -679,6 +678,56 @@ def _sic_to_sector(sic):
 # ═══════════════════════════════════════════════════════════════
 # Data QA
 # ═══════════════════════════════════════════════════════════════
+
+def edgar_field_diagnostic(edgar_data):
+    """Print per-field null rates across all EDGAR quarters.
+
+    Helps diagnose XBRL mapping coverage after parse changes.
+    """
+    if not edgar_data:
+        print("  EDGAR diagnostic: no data")
+        return
+
+    tickers = {k[0] for k in edgar_data}
+    n_quarters = len(edgar_data)
+    print(f"\n  ═══ EDGAR FIELD DIAGNOSTIC ═══")
+    print(f"  {len(tickers)} tickers, {n_quarters} quarter-rows")
+
+    # Count non-null per field
+    field_counts = {}
+    for fields in edgar_data.values():
+        for f in ALL_CORE_FIELDS:
+            if f not in field_counts:
+                field_counts[f] = 0
+            if f in fields and fields[f] is not None and not (isinstance(fields[f], float) and np.isnan(fields[f])):
+                field_counts[f] += 1
+
+    print(f"  {'Field':<45s} {'Present':>8s} {'Null%':>7s}")
+    print(f"  {'-'*62}")
+    for f in sorted(field_counts, key=lambda x: field_counts[x], reverse=True):
+        present = field_counts[f]
+        null_pct = 1 - present / n_quarters
+        status = 'OK' if null_pct < 0.3 else 'WARN' if null_pct < 0.6 else 'HIGH'
+        print(f"  {f:<45s} {present:>8,} {null_pct:>6.0%} [{status}]")
+
+    # Margin-relevant fields specifically
+    margin_fields = ['Revenue', 'Cost of Revenue', 'Gross Profit',
+                     'Operating Income (Loss)', 'Net Income']
+    has_revenue = sum(1 for v in edgar_data.values()
+                      if 'Revenue' in v and v['Revenue'] is not None)
+    has_gp = sum(1 for v in edgar_data.values()
+                 if 'Gross Profit' in v and v['Gross Profit'] is not None)
+    has_cogs = sum(1 for v in edgar_data.values()
+                   if 'Cost of Revenue' in v and v['Cost of Revenue'] is not None)
+    print(f"\n  Margin coverage: Revenue={has_revenue}/{n_quarters} "
+          f"GrossProfit={has_gp}/{n_quarters} COGS={has_cogs}/{n_quarters}")
+    if has_revenue > 0 and has_gp / has_revenue < 0.5:
+        gp_derived = sum(1 for v in edgar_data.values()
+                         if 'Revenue' in v and 'Cost of Revenue' in v
+                         and v.get('Revenue') and v.get('Cost of Revenue'))
+        print(f"  GP derivable from Revenue-COGS: {gp_derived} rows")
+    print(f"  ═══ END EDGAR DIAGNOSTIC ═══\n")
+
 
 def run_data_qa(df_inc, df_bal, df_cf, edgar_data, sp_tickers):
     """Comprehensive data quality audit after merge."""

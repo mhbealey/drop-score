@@ -21,7 +21,7 @@ from config import (
 from utils import elapsed
 from data import load_all_data
 from features import prepare_features
-from edgar import run_feature_qa
+from edgar import run_feature_qa, edgar_field_diagnostic
 
 
 def main():

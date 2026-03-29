@@ -25,6 +25,7 @@ from utils import strip_tz, elapsed
 from edgar import (
     load_cik_map, fetch_edgar_fundamentals, merge_edgar_into_simfin,
     get_edgar_sector_map, load_edgar_cache, run_data_qa,
+    edgar_field_diagnostic,
 )
 
 
@@ -558,6 +559,9 @@ def load_all_data():
             sorted(needs_fundamentals), cik_map, cache_dir
         )
         edgar_tickers = {k[0] for k in edgar_data}
+
+        # EDGAR field diagnostic (shows null rates after re-parse)
+        edgar_field_diagnostic(edgar_data)
 
         df_inc, df_bal, df_cf, edgar_filing_meta = merge_edgar_into_simfin(
             df_inc, df_bal, df_cf, edgar_data, sector_map

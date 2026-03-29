@@ -21,8 +21,13 @@ from config import (
 from utils import clean_X, elapsed, to_scalar, ensure_series
 
 
-def _process_quarters(data_bundle, wf_tgt):
-    """Train WF-internal models per quarter and return scored picks."""
+def _process_quarters(data_bundle, wf_tgt, xgb_override=None):
+    """Train WF-internal models per quarter and return scored picks.
+
+    Args:
+        xgb_override: dict of XGB params to override defaults (for A/B comparison).
+                      Keys: n_estimators, max_depth, learning_rate, subsample, etc.
+    """
     df_dev = data_bundle['df_dev']
     fcols_q = data_bundle['fcols_q']
     fill_meds_q = data_bundle['fill_meds_q']
@@ -75,11 +80,18 @@ def _process_quarters(data_bundle, wf_tgt):
         wf_feats = pd.Series(
             sel_wf.feature_importances_, index=fcols_q
         ).nlargest(K).index.tolist()
-        mdl_wf = xgb.XGBClassifier(
+        # Default params (can be overridden for A/B comparison)
+        xgb_params = dict(
             n_estimators=200, max_depth=5, learning_rate=0.05,
-            scale_pos_weight=sw_wf, subsample=0.8, colsample_bytree=0.8,
+            subsample=0.8, colsample_bytree=0.8,
             reg_alpha=0.1, reg_lambda=1.0,
+        )
+        if xgb_override:
+            xgb_params.update(xgb_override)
+        mdl_wf = xgb.XGBClassifier(
+            scale_pos_weight=sw_wf,
             eval_metric='logloss', random_state=42, verbosity=0,
+            **xgb_params,
         )
         mdl_wf.fit(X_wf[wf_feats], y_wf)
         X_test = clean_X(wf_test, fcols_q, fill_meds_q)
@@ -366,3 +378,34 @@ def run_walkforward(data_bundle):
         wf_comparison=comparison,
     )
     return data_bundle
+
+
+def run_walkforward_ab(data_bundle, xgb_override, label="Bayesian"):
+    """Run walk-forward with custom XGB params for A/B comparison.
+
+    Returns (wf_df, tiers) without modifying data_bundle.
+    """
+    t0 = time.time()
+    wf_tgt = TRADING_TARGET
+    v_results = data_bundle['v_results']
+    price_dict = data_bundle['price_dict']
+    tradeable_tickers = data_bundle.get('tradeable_tickers')
+
+    if wf_tgt not in v_results:
+        best_fallback = max(v_results, key=lambda k: v_results[k]['mauc'])
+        wf_tgt = best_fallback
+
+    use_conf = (ENTRY_MODE == "confirmed")
+
+    scored_quarters = _process_quarters(data_bundle, wf_tgt, xgb_override=xgb_override)
+
+    trades = _generate_trades(
+        scored_quarters, TRADING_HOLD, price_dict,
+        use_confirmation=use_conf,
+        tradeable_tickers=tradeable_tickers,
+    )
+    wf_df = pd.DataFrame(trades) if trades else pd.DataFrame()
+    tiers = _tier_stats(wf_df) if len(wf_df) >= 20 else {}
+
+    print(f"  [{label}] {len(wf_df)} trades, {time.time()-t0:.0f}s")
+    return wf_df, tiers

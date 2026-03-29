@@ -27,6 +27,7 @@ from config import (
 from utils import elapsed, ensure_series
 from data import get_sp_index_tickers
 from model import run_bayesian_optimization, run_bootstrap_ci
+from walkforward import run_walkforward_ab
 
 # v18 benchmarks
 V18_A = {
@@ -116,6 +117,96 @@ def main():
         result['bootstrap_ci'] = boot
     else:
         print(f"  TIME BUDGET: >{60} min, skipping Bayesian optimization")
+
+    # ═══════════════════════════════════════════════════════════════
+    # A/B COMPARISON: Default vs Bayesian params (informational only)
+    # ═══════════════════════════════════════════════════════════════
+    optuna_bp = result.get('optuna_best_params')
+    if optuna_bp and len(result.get('wf_df', pd.DataFrame())) >= 10:
+        print(f"\n{'='*70}")
+        print(f"A/B COMPARISON: Default vs Bayesian XGB params")
+        print(f"{'='*70}")
+
+        # Extract Bayesian XGB params
+        bayesian_xgb = {}
+        param_map = {
+            'xgb_max_depth': 'max_depth',
+            'xgb_lr': 'learning_rate',
+            'xgb_n_est': 'n_estimators',
+            'xgb_subsample': 'subsample',
+            'xgb_colsample': 'colsample_bytree',
+            'xgb_alpha': 'reg_alpha',
+            'xgb_lambda': 'reg_lambda',
+        }
+        for optuna_key, xgb_key in param_map.items():
+            if optuna_key in optuna_bp:
+                bayesian_xgb[xgb_key] = optuna_bp[optuna_key]
+
+        print(f"  Default:  depth=5, lr=0.05, n_est=200, sub=0.8, col=0.8")
+        print(f"  Bayesian: depth={bayesian_xgb.get('max_depth', '?')}, "
+              f"lr={bayesian_xgb.get('learning_rate', '?'):.3f}, "
+              f"n_est={bayesian_xgb.get('n_estimators', '?')}, "
+              f"sub={bayesian_xgb.get('subsample', '?'):.2f}, "
+              f"col={bayesian_xgb.get('colsample_bytree', '?'):.2f}")
+
+        wf_df_b, tiers_b = run_walkforward_ab(result, bayesian_xgb, label="Bayesian")
+        tiers_a = {}
+        wf_df_a = result.get('wf_df', pd.DataFrame())
+        if len(wf_df_a) >= 20:
+            from walkforward import _tier_stats
+            tiers_a = _tier_stats(wf_df_a)
+
+        print(f"\n  {'':10s} {'':6s} {'── Default ──':>28s}  {'── Bayesian ──':>28s}")
+        print(f"  {'Tier':<10s} {'':6s} {'n':>4s} {'Win':>5s} {'$/sh':>7s} {'Stops':>6s}"
+              f"  {'n':>4s} {'Win':>5s} {'$/sh':>7s} {'Stops':>6s}")
+        print(f"  {'-'*72}")
+        for tier_name in ['Top 10%', 'Top 25%', 'Top 50%', 'Full']:
+            ta = tiers_a.get(tier_name, {})
+            tb = tiers_b.get(tier_name, {})
+            def _tv(t, k, fmt='.0%'):
+                v = t.get(k)
+                if v is None or (isinstance(v, float) and np.isnan(v)):
+                    return 'N/A'.rjust(5)
+                return f"{v:{fmt}}"
+            a_str = (f"{ta.get('n', 0):>4} {_tv(ta, 'win'):>5s} "
+                     f"${ta.get('avg_pnl', 0):>+6.2f} {_tv(ta, 'stop_rate'):>6s}")
+            b_str = (f"{tb.get('n', 0):>4} {_tv(tb, 'win'):>5s} "
+                     f"${tb.get('avg_pnl', 0):>+6.2f} {_tv(tb, 'stop_rate'):>6s}")
+            print(f"  {tier_name:<10s} {'':6s} {a_str}  {b_str}")
+        print(f"  NOTE: Informational only — no config changes made")
+    else:
+        print(f"\n  A/B comparison skipped (no Bayesian params or too few trades)")
+
+    # ═══════════════════════════════════════════════════════════════
+    # CONVICTION SWEEP: Score percentile thresholds (informational)
+    # ═══════════════════════════════════════════════════════════════
+    wf_df_sweep = result.get('wf_df', pd.DataFrame())
+    if len(wf_df_sweep) >= 20:
+        print(f"\n{'='*70}")
+        print(f"CONVICTION SWEEP: Score percentile thresholds")
+        print(f"{'='*70}")
+        print(f"  {'Threshold':<12s} {'n':>5s} {'Win':>6s} {'Avg$/sh':>9s} "
+              f"{'Med$/sh':>9s} {'Stops':>6s} {'Tr/Q':>5s} {'ProfQ':>6s}")
+        print(f"  {'-'*60}")
+
+        nq = wf_df_sweep['quarter'].nunique()
+        for label, pct in [('Top 10%', 0.90), ('Top 15%', 0.85), ('Top 20%', 0.80),
+                           ('Top 25%', 0.75), ('Top 33%', 0.67), ('Top 50%', 0.50),
+                           ('Full', 0.0)]:
+            cutoff = wf_df_sweep['score'].quantile(pct)
+            sub = wf_df_sweep[wf_df_sweep['score'] >= cutoff]
+            if len(sub) < 3:
+                continue
+            win = (sub['pnl_per_share'] > 0).mean()
+            avg = sub['pnl_per_share'].mean()
+            med = sub['pnl_per_share'].median()
+            sr = sub['stopped'].mean()
+            tpq = len(sub) / nq if nq > 0 else 0
+            q_pnl = sub.groupby('quarter')['pnl_per_share'].sum()
+            prof_q = f"{(q_pnl > 0).sum()}/{len(q_pnl)}"
+            print(f"  {label:<12s} {len(sub):>5} {win:>5.0%} ${avg:>+8.2f} "
+                  f"${med:>+8.2f} {sr:>5.0%} {tpq:>5.1f} {prof_q:>6s}")
+        print(f"  NOTE: Informational only — no config changes made")
 
     # ═══════════════════════════════════════════════════════════════
     # HEAD-TO-HEAD COMPARISON
