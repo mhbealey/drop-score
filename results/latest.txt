@@ -21,21 +21,21 @@ VULNERABILITY MODEL...
 
   RESULTS:
     EXCESS:
-      exdrop_15_10d                  AUC:0.762 [0.722,0.793] BR:6%
-      exdrop_10_5d                   AUC:0.740 [0.703,0.770] BR:6%
-      exdrop_10_10d                  AUC:0.723 [0.691,0.747] BR:13%
-      exdrop_15_5d                   AUC:0.715 [0.650,0.796] BR:2%
-      exdrop_15_42d                  AUC:0.694 [0.665,0.708] BR:23%
+      exdrop_15_10d                  AUC:0.762 [0.718,0.798] BR:6%
+      exdrop_10_5d                   AUC:0.740 [0.701,0.768] BR:6%
+      exdrop_10_10d                  AUC:0.723 [0.693,0.748] BR:13%
+      exdrop_15_5d                   AUC:0.715 [0.648,0.800] BR:2%
+      exdrop_15_42d                  AUC:0.694 [0.666,0.709] BR:23%
     VOL-ADJ:
-      voladj_2sig_10d                AUC:0.921 [0.897,0.938] BR:13% ◄
+      voladj_2sig_10d                AUC:0.921 [0.896,0.940] BR:13% ◄
       voladj_2sig_5d                 AUC:0.919 [0.898,0.939] BR:13%
-      voladj_1sig_10d                AUC:0.851 [0.820,0.881] BR:23%
-      voladj_1sig_5d                 AUC:0.838 [0.810,0.869] BR:23%
-      voladj_1sig_21d                AUC:0.661 [0.611,0.711] BR:15%
+      voladj_1sig_10d                AUC:0.851 [0.819,0.874] BR:23%
+      voladj_1sig_5d                 AUC:0.838 [0.815,0.869] BR:23%
+      voladj_1sig_21d                AUC:0.661 [0.612,0.714] BR:15%
     RAW:
-      drop_5_42d                     AUC:0.660 [0.620,0.696] BR:36%
-      drop_5_63d                     AUC:0.654 [0.619,0.691] BR:38%
-      drop_5_21d                     AUC:0.629 [0.585,0.677] BR:32%
+      drop_5_42d                     AUC:0.660 [0.617,0.696] BR:36%
+      drop_5_63d                     AUC:0.654 [0.615,0.692] BR:38%
+      drop_5_21d                     AUC:0.629 [0.583,0.672] BR:32%
   BEST: voladj_2sig_10d | 0.921 | K=10
   Features: ['log_revenue', 'mom_21d', 'dollar_volume', 'capex_to_revenue', 'max_dd_63d', 'vol_30d', 'vol_ratio_30_60', 'accruals', 'liab_to_assets', 'filing_delay_days']
 
@@ -51,7 +51,7 @@ VULNERABILITY MODEL...
     Trunc-dev holdout: 0.780
     (If similar → no leakage. If trunc is lower → sampling variation in full holdout)
 
-  Flagged: 271 | [1m53s]
+  Flagged: 271 | [1m52s]
 
 ======================================================================
 WALK-FORWARD: exdrop_15_10d / 21d hold / confirmed entry
@@ -136,20 +136,20 @@ DIAGNOSTICS
   ═══ BAYESIAN OPTIMIZATION ═══
   Target: exdrop_15_10d | Features: 10 | Trials: 30
   Trials completed: 30
-  Best AUC: 0.844
-  Best XGB weight: 0.57
-  Best XGB: depth=5, lr=0.011, n_est=204
-  Best LGB: depth=3, lr=0.035, n_est=435
+  Best AUC: 0.841
+  Best XGB weight: 0.46
+  Best XGB: depth=5, lr=0.012, n_est=377
+  Best LGB: depth=4, lr=0.026, n_est=317
   Baseline dev AUC (fixed params): 0.762
-  Optimized AUC: 0.844
-  Improvement: +0.083
+  Optimized AUC: 0.841
+  Improvement: +0.080
   ═══ END BAYESIAN OPTIMIZATION ═══
 
-  Optuna improved AUC by +0.083
+  Optuna improved AUC by +0.080
 
   ═══ CONFIDENCE INTERVALS (Bootstrap, n=1000) ═══
   Win rate: 82.7% [70.2%, 93.6%]
-  Avg P&L: $1.55 [$0.53, $2.58]
+  Avg P&L: $1.55 [$0.51, $2.58]
   ═══ END BOOTSTRAP CIs ═══
 
 
@@ -157,16 +157,16 @@ DIAGNOSTICS
 A/B COMPARISON: Default vs Bayesian XGB params
 ======================================================================
   Default:  depth=5, lr=0.05, n_est=200, sub=0.8, col=0.8
-  Bayesian: depth=5, lr=0.011, n_est=204, sub=0.64, col=0.56
-  [Bayesian] 191 trades, 4s
+  Bayesian: depth=5, lr=0.012, n_est=377, sub=0.89, col=0.88
+  [Bayesian] 182 trades, 6s
 
                                    ── Default ──                ── Bayesian ──
   Tier                 n   Win    $/sh  Stops     n   Win    $/sh  Stops
   ------------------------------------------------------------------------
-  Top 10%             19   84% $ +2.10    26%    20   80% $ +1.36    40%
-  Top 25%             47   83% $ +1.57    43%    48   73% $ +1.42    40%
-  Top 50%             93   71% $ +1.32    39%    96   70% $ +1.34    44%
-  Full               185   65% $ +1.00    44%   191   65% $ +1.25    45%
+  Top 10%             19   84% $ +2.10    26%    19   89% $ +2.59    42%
+  Top 25%             47   83% $ +1.57    43%    46   80% $ +1.82    39%
+  Top 50%             93   71% $ +1.32    39%    91   68% $ +0.80    44%
+  Full               185   65% $ +1.00    44%   182   65% $ +1.05    43%
   NOTE: Informational only — no config changes made
 
 ======================================================================
@@ -254,4 +254,4 @@ QA CHECKLIST
 Total: 2.4 min
 Drop Score v18.3 complete.
 
-Log saved to results/model_20260329_183455.txt
+Log saved to results/model_20260329_191200.txt
