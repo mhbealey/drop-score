@@ -25,6 +25,13 @@ def _safe_get_loc(index, key):
     return int(np.argmax(loc))
 
 
+def _safe_scalar(val):
+    """Extract scalar from value that might be a Series due to duplicate index."""
+    if isinstance(val, pd.Series):
+        return val.iloc[0]
+    return val
+
+
 def recompute_outcomes(df, price_dict, spy_close):
     """Recompute forward-return and vol-adjusted outcomes for a dataframe."""
     chunks = []
@@ -61,8 +68,9 @@ def _outcomes(grp, pd_dict, spy_c):
         if sp_ <= 0:
             results.append(oc)
             continue
+        v30_val = _safe_scalar(v30_s.iloc[si]) if si < len(v30_s) else np.nan
         cur_vol = max(
-            to_scalar(v30_s.iloc[si]) if si < len(v30_s) and pd.notna(v30_s.iloc[si]) else 0.3,
+            to_scalar(v30_val) if pd.notna(v30_val) else 0.3,
             0.05,
         )
         for w in FWD_WINDOWS:
@@ -309,6 +317,11 @@ def build_features_from_scratch(data_bundle):
     universe = data_bundle['universe']
     intermediates_path = data_bundle['intermediates_path']
     edgar_filing_meta = data_bundle.get('edgar_filing_meta', {})
+
+    # Deduplicate price index entries (some tickers have duplicate dates)
+    for tk in list(price_dict.keys()):
+        if isinstance(price_dict[tk], pd.DataFrame) and price_dict[tk].index.duplicated().any():
+            price_dict[tk] = price_dict[tk][~price_dict[tk].index.duplicated(keep='first')]
 
     # Build quarterly feature rows
     rows = []
