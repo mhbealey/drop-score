@@ -297,7 +297,7 @@ def run_equity_scenarios(data_bundle: dict) -> dict:
         plt.show()
 
     log.info(f"  [{time.time()-t0:.0f}s] {elapsed()}")
-    log.info()
+    log.info("")
 
     data_bundle['eq_results'] = eq_results
     data_bundle['best_sc'] = best_sc
@@ -334,7 +334,7 @@ def _run_diagnostics(data_bundle, wf_top, all_wf_trades, best_sc, spy_close, pri
         log.info(f"\n  EARNINGS PROXIMITY: skipped ({e})")
 
     log.info(f"  [{time.time()-t0:.0f}s] {elapsed()}")
-    log.info()
+    log.info("")
 
 
 def _staged_entry_diagnostic(all_wf_trades, price_dict):

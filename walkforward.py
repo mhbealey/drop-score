@@ -124,13 +124,21 @@ def _process_quarters(data_bundle, wf_tgt, xgb_override=None):
 
 
 def _generate_trades(scored_quarters, hold_days, price_dict,
-                     use_confirmation=False, tradeable_tickers=None):
+                     use_confirmation=False, tradeable_tickers=None,
+                     use_stops=True, confirm_drop=None, confirm_window=None):
     """Generate trades from scored picks with specific hold period and entry mode.
 
     Borrow costs are volume-based:
         avg_vol >= 1M  -> BORROW_RATE_EASY (3% annual)
         avg_vol < 1M   -> BORROW_RATE_HARD (6% annual)
+
+    Args:
+        use_stops: If False, hold for full period without stop-loss/trailing/profit-target.
+        confirm_drop: Override CONFIRMATION_DROP (e.g. 0.01 for relaxed).
+        confirm_window: Override CONFIRMATION_WINDOW (e.g. 3 for relaxed).
     """
+    _conf_drop = confirm_drop if confirm_drop is not None else CONFIRMATION_DROP
+    _conf_window = confirm_window if confirm_window is not None else CONFIRMATION_WINDOW
     all_trades = []
 
     for test_q, picks in scored_quarters:
@@ -154,9 +162,9 @@ def _generate_trades(scored_quarters, hold_days, price_dict,
                 if signal_price <= 0:
                     continue
                 confirm_si = None
-                for ci in range(si + 1, min(si + CONFIRMATION_WINDOW + 1, len(px2))):
+                for ci in range(si + 1, min(si + _conf_window + 1, len(px2))):
                     day_price = to_scalar(px2.iloc[ci])
-                    if (day_price - signal_price) / signal_price <= -CONFIRMATION_DROP:
+                    if (day_price - signal_price) / signal_price <= -_conf_drop:
                         confirm_si = ci
                         break
                 if confirm_si is None:
@@ -198,23 +206,24 @@ def _generate_trades(scored_quarters, hold_days, price_dict,
             exit_day = len(path)
             for di, day_p in enumerate(path, 1):
                 best_p = min(best_p, day_p)
-                if (day_p - entry_p) / entry_p > STOP_LOSS:
-                    exit_p = entry_p * (1 + STOP_LOSS) * (1 + SLIPPAGE)
-                    stopped = True
-                    exit_day = di
-                    break
-                if (entry_p - day_p) / entry_p >= PROFIT_TARGET:
-                    exit_p = day_p * (1 + SLIPPAGE)
-                    profit_taken = True
-                    exit_day = di
-                    break
-                if (day_p < entry_p * 0.97
-                        and best_p < entry_p
-                        and (day_p - best_p) / best_p > TRAILING_STOP):
-                    exit_p = day_p * (1 + SLIPPAGE)
-                    stopped = True
-                    exit_day = di
-                    break
+                if use_stops:
+                    if (day_p - entry_p) / entry_p > STOP_LOSS:
+                        exit_p = entry_p * (1 + STOP_LOSS) * (1 + SLIPPAGE)
+                        stopped = True
+                        exit_day = di
+                        break
+                    if (entry_p - day_p) / entry_p >= PROFIT_TARGET:
+                        exit_p = day_p * (1 + SLIPPAGE)
+                        profit_taken = True
+                        exit_day = di
+                        break
+                    if (day_p < entry_p * 0.97
+                            and best_p < entry_p
+                            and (day_p - best_p) / best_p > TRAILING_STOP):
+                        exit_p = day_p * (1 + SLIPPAGE)
+                        stopped = True
+                        exit_day = di
+                        break
             if not stopped and not profit_taken:
                 exit_p = path[-1] * (1 + SLIPPAGE)
 
@@ -357,7 +366,7 @@ def run_walkforward(data_bundle: dict) -> dict:
     log.info(f"\n  Profitable quarters: {prof_q}/{total_q}")
     log.info(f"  Trades: {len(wf_df)} total, {len(wf_top)} top-25%")
     log.info(f"  [{time.time()-t0:.0f}s] {elapsed()}")
-    log.info()
+    log.info("")
 
     # Build comparison row for main.py head-to-head
     t25 = tiers.get('Top 25%', {})
@@ -380,6 +389,72 @@ def run_walkforward(data_bundle: dict) -> dict:
         wf_comparison=comparison,
     )
     return data_bundle
+
+
+def run_walkforward_analysis(data_bundle: dict, entry_mode: str = "confirmed",
+                             use_stops: bool = True, random_flags: bool = False,
+                             n_random_flags: int = 50, random_seed: int = 42,
+                             confirm_drop: Optional[float] = None,
+                             confirm_window: Optional[int] = None,
+                             xgb_override: Optional[dict] = None,
+                             ) -> Tuple[pd.DataFrame, dict]:
+    """Flexible walk-forward for analysis variants. Returns (wf_df, tiers).
+
+    Does NOT modify data_bundle.
+
+    Args:
+        entry_mode: "confirmed", "immediate", or "confirmed_relaxed".
+        use_stops: If False, hold full period without stops.
+        random_flags: If True, assign random scores instead of model scores.
+        n_random_flags: Number of random picks per quarter (when random_flags=True).
+        random_seed: Seed for random flag generation.
+        confirm_drop: Override confirmation drop threshold.
+        confirm_window: Override confirmation window days.
+        xgb_override: Override XGB params for A/B testing.
+    """
+    import random as _rand
+
+    wf_tgt = TRADING_TARGET
+    v_results = data_bundle['v_results']
+    price_dict = data_bundle['price_dict']
+    tradeable_tickers = data_bundle.get('tradeable_tickers')
+
+    if wf_tgt not in v_results:
+        best_fallback = max(v_results, key=lambda k: v_results[k]['mauc'])
+        wf_tgt = best_fallback
+
+    # Entry mode logic
+    use_conf = entry_mode in ("confirmed", "confirmed_relaxed")
+    if entry_mode == "confirmed_relaxed":
+        confirm_drop = confirm_drop or 0.01
+        confirm_window = confirm_window or 3
+
+    # Train models and score quarters
+    scored_quarters = _process_quarters(data_bundle, wf_tgt, xgb_override=xgb_override)
+
+    # Random flags: replace model scores with random scores
+    if random_flags:
+        rng = _rand.Random(random_seed)
+        randomized = []
+        for test_q, picks in scored_quarters:
+            picks = picks.copy()
+            # Assign random scores and take n_random_flags
+            picks['wf_score'] = [rng.random() for _ in range(len(picks))]
+            picks = picks.nlargest(min(n_random_flags, len(picks)), 'wf_score')
+            randomized.append((test_q, picks))
+        scored_quarters = randomized
+
+    trades = _generate_trades(
+        scored_quarters, TRADING_HOLD, price_dict,
+        use_confirmation=use_conf,
+        tradeable_tickers=tradeable_tickers,
+        use_stops=use_stops,
+        confirm_drop=confirm_drop,
+        confirm_window=confirm_window,
+    )
+    wf_df = pd.DataFrame(trades) if trades else pd.DataFrame()
+    tiers = _tier_stats(wf_df) if len(wf_df) >= 20 else {}
+    return wf_df, tiers
 
 
 def run_walkforward_ab(data_bundle: dict, xgb_override: dict,
