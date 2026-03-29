@@ -1,35 +1,43 @@
-name: Run Drop Score v18
+name: Drop Score Pipeline
 
 on:
   push:
     branches: [main, claude/add-file-upload-9O4en]
   workflow_dispatch:
+    inputs:
+      skip_validate:
+        description: 'Skip validation (run model directly)'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
+env:
+  SIMFIN_KEY: ${{ secrets.SIMFIN_KEY }}
+  FMP_KEY: ${{ secrets.FMP_KEY }}
+
 jobs:
-  run:
+  # ─────────────────────────────────────────
+  # STAGE 1: Data Pipeline (~2 min cached, ~20 min cold)
+  # ─────────────────────────────────────────
+  data:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
-
-    env:
-      SIMFIN_KEY: ${{ secrets.SIMFIN_KEY }}
-      FMP_KEY: ${{ secrets.FMP_KEY }}
-
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: '3.12'
 
-      - name: Cache data directory
+      - name: Restore data cache
         uses: actions/cache@v4
         with:
           path: data/
-          key: drop-score-data-${{ hashFiles('data.py') }}
+          key: drop-score-data-v3-${{ github.run_number }}
           restore-keys: |
+            drop-score-data-v3-
             drop-score-data-
 
       - name: Install dependencies
@@ -37,29 +45,132 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run main.py
-        run: python main.py
+      - name: Run data pipeline
+        run: python run_data.py
 
-      - name: Save results
+      - name: Upload data bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: data-bundle
+          path: |
+            data/data_bundle.pkl
+          retention-days: 1
+          compression-level: 6
+
+      - name: Upload data logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: data-logs
+          path: results/data_*.txt
+          retention-days: 7
+
+  # ─────────────────────────────────────────
+  # STAGE 2: Validate Universe A (~5 min)
+  # ─────────────────────────────────────────
+  validate:
+    needs: data
+    if: ${{ !inputs.skip_validate }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Download data bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: data-bundle
+          path: data/
+
+      - name: Validate Universe A
+        run: python run_validate.py
+
+      - name: Upload validation results
+        uses: actions/upload-artifact@v4
+        with:
+          name: validate-results
+          path: data/validate_results.pkl
+          retention-days: 1
+
+      - name: Upload validate logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validate-logs
+          path: results/validate_*.txt
+          retention-days: 7
+
+  # ─────────────────────────────────────────
+  # STAGE 3: Model Universe B (~15 min)
+  # ─────────────────────────────────────────
+  model:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Download data bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: data-bundle
+          path: data/
+
+      - name: Download validation results
+        uses: actions/download-artifact@v4
+        with:
+          name: validate-results
+          path: data/
+
+      - name: Run model
+        run: python run_model.py
+
+      - name: Combine results
+        if: always()
+        run: |
+          # Collect all logs into latest.txt
+          cd results
+          LATEST=$(ls -t *.txt 2>/dev/null | head -1)
+          if [ -n "$LATEST" ]; then
+            cp "$LATEST" latest.txt
+          fi
+
+      - name: Save results to repo
+        if: always()
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          LATEST=$(ls -t results/*.txt | head -1)
-          cp "$LATEST" results/latest.txt
-          git add -f results/latest.txt
-          git diff --cached --quiet || git commit -m "results: $(date -u +%Y-%m-%d)" && git push
-        if: always()
+          git add -f results/latest.txt 2>/dev/null || true
+          git diff --cached --quiet || git commit -m "results: $(date -u +%Y-%m-%d)" && git push || true
 
       - name: Share results
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          LATEST=$(ls -t results/*.txt | head -1)
+          LATEST=$(ls -t results/*.txt 2>/dev/null | head -1)
           if [ -f "$LATEST" ]; then
             URL=$(gh gist create "$LATEST" --public 2>&1 | tail -1)
-            echo "📋 RESULTS: $URL"
+            echo "RESULTS: $URL"
           fi
-        if: always()
 
       - name: Upload results
         if: always()
@@ -67,3 +178,4 @@ jobs:
         with:
           name: results-${{ github.sha }}
           path: results/
+          retention-days: 30
