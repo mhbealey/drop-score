@@ -5,6 +5,8 @@ training/tradeable split, S&P index tickers.
 """
 import os, time, pickle, random, json
 import urllib.request
+from typing import Any, Dict, List, Optional, Set, Tuple
+
 import simfin as sf
 import yfinance as yf
 import pandas as pd
@@ -33,7 +35,7 @@ from edgar import (
 # Cache helpers
 # ═══════════════════════════════════════════════════════════════
 
-def setup_cache_dir():
+def setup_cache_dir() -> str:
     """Mount Google Drive if available, else use local data/ dir."""
     try:
         from google.colab import drive
@@ -48,8 +50,8 @@ def setup_cache_dir():
     return cache_dir
 
 
-def load_cache(cache_dir):
-    """Load pickle cache from disk."""
+def load_cache(cache_dir: str) -> Tuple[dict, str]:
+    """Load pickle cache from disk. Returns (cache_dict, cache_path)."""
     cache_path = os.path.join(cache_dir, 'drop_score_cache.pkl')
     cache = {}
     for cf in [cache_path, os.path.join(cache_dir, 'v11_cache.pkl')]:
@@ -64,7 +66,7 @@ def load_cache(cache_dir):
     return cache, cache_path
 
 
-def save_cache(cache, cache_path):
+def save_cache(cache: dict, cache_path: str) -> None:
     try:
         with open(cache_path, 'wb') as f:
             pickle.dump(cache, f)
@@ -159,7 +161,9 @@ def load_sector_map(cache, cache_path):
 # Universe construction
 # ═══════════════════════════════════════════════════════════════
 
-def build_universe(df_inc, df_bal, df_cf, sector_map, min_quarters=8):
+def build_universe(df_inc: pd.DataFrame, df_bal: pd.DataFrame,
+                   df_cf: pd.DataFrame, sector_map: Dict[str, str],
+                   min_quarters: int = 8) -> List[str]:
     """Build filtered stock universe (exclude Financials only)."""
     cutoff = pd.Timestamp.now() - pd.DateOffset(years=4)
     u_raw = set(df_inc.groupby('Ticker').size()[lambda x: x >= min_quarters].index)
@@ -176,9 +180,12 @@ def build_universe(df_inc, df_bal, df_cf, sector_map, min_quarters=8):
     return universe
 
 
-def classify_tickers(price_dict, vol_floor=VOL_FLOOR, months_threshold=6):
+def classify_tickers(price_dict: Dict[str, pd.DataFrame],
+                     vol_floor: int = VOL_FLOOR,
+                     months_threshold: int = 6) -> Tuple[Set[str], Set[str]]:
     """Classify tickers as tradeable vs delisted-with-history.
 
+    Returns (tradeable, delisted_with_history).
     tradeable: recent prices (within months_threshold) AND avg volume >= vol_floor
     delisted_with_history: has prices but not tradeable (kept for training)
     """
@@ -446,7 +453,7 @@ def download_all_prices(universe, cache, cache_path):
 # S&P Index tickers
 # ═══════════════════════════════════════════════════════════════
 
-def get_sp_index_tickers():
+def get_sp_index_tickers() -> Set[str]:
     """S&P 400+600 tickers from static CSV files."""
     tickers = set()
     for f in ['data/sp400_tickers.csv', 'data/sp600_tickers.csv']:
@@ -469,8 +476,13 @@ def _to_series(df, col='Close'):
     return s
 
 
-def derive_benchmarks(price_dict):
-    """Extract SPY, VIX, and sector ETF return series."""
+def derive_benchmarks(price_dict: Dict[str, pd.DataFrame]) -> Tuple[
+        Optional[pd.Series], Optional[pd.Series],
+        Optional[pd.Series], Dict[str, pd.Series]]:
+    """Extract SPY, VIX, and sector ETF return series.
+
+    Returns (spy_close, spy_ret, vix_series, sector_etf_ret).
+    """
     spy_close = spy_ret = vix_series = None
     if 'SPY' in price_dict:
         spy_close = _to_series(price_dict['SPY'])
@@ -490,8 +502,8 @@ def derive_benchmarks(price_dict):
 # Top-level data loader
 # ═══════════════════════════════════════════════════════════════
 
-def load_all_data():
-    """Top-level entry point: load everything and return a data bundle."""
+def load_all_data() -> dict:
+    """Top-level entry point: load everything and return a data bundle dict."""
     t0 = time.time()
     print("DATA...")
 

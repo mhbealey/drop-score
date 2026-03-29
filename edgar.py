@@ -8,141 +8,24 @@ Rate limit: 10 req/sec with proper User-Agent header.
 import os, time, json, pickle
 import urllib.request
 import urllib.error
+from typing import Any, Dict, List, Optional, Set, Tuple
+
 import pandas as pd
 import numpy as np
 
-
-# ═══════════════════════════════════════════════════════════════
-# SEC User-Agent (required by SEC EDGAR)
-# ═══════════════════════════════════════════════════════════════
-
-SEC_HEADERS = {'User-Agent': 'DropScore michael@dropscore.dev'}
-SEC_RATE_DELAY = 0.12  # 10 req/sec
-
-
-# ═══════════════════════════════════════════════════════════════
-# XBRL → SimFin field mapping
-# ═══════════════════════════════════════════════════════════════
-
-XBRL_TO_FIELD = {
-    'Revenue': [
-        'Revenues',
-        'RevenueFromContractWithCustomerExcludingAssessedTax',
-        'RevenueFromContractWithCustomerIncludingAssessedTax',
-        'SalesRevenueNet',
-        'SalesRevenueGoodsNet',
-        'SalesRevenueServicesNet',
-        'RegulatedAndUnregulatedOperatingRevenue',
-    ],
-    'Cost of Revenue': [
-        'CostOfRevenue',
-        'CostOfGoodsAndServicesSold',
-        'CostOfGoodsSold',
-        'CostOfServices',
-        'CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization',
-    ],
-    'Gross Profit': [
-        'GrossProfit',
-    ],
-    'Operating Income (Loss)': [
-        'OperatingIncomeLoss',
-        'IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest',
-        'IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments',
-    ],
-    'Net Income': [
-        'NetIncomeLoss',
-        'ProfitLoss',
-        'NetIncomeLossAvailableToCommonStockholdersBasic',
-        'NetIncomeLossAvailableToCommonStockholdersDiluted',
-    ],
-    'Interest Expense, Net': [
-        'InterestExpense',
-        'InterestExpenseDebt',
-        'InterestIncomeExpenseNet',
-    ],
-    'Total Assets': [
-        'Assets',
-    ],
-    'Total Equity': [
-        'StockholdersEquity',
-        'StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest',
-    ],
-    'Total Liabilities': [
-        'Liabilities',
-        'LiabilitiesAndStockholdersEquity',
-    ],
-    'Total Debt': [
-        'LongTermDebt',
-        'LongTermDebtNoncurrent',
-        'LongTermDebtAndCapitalLeaseObligations',
-        'DebtAndCapitalLeaseObligations',
-    ],
-    'Total Current Assets': [
-        'AssetsCurrent',
-    ],
-    'Total Current Liabilities': [
-        'LiabilitiesCurrent',
-    ],
-    'Cash, Cash Equivalents & Short Term Investments': [
-        'CashAndCashEquivalentsAtCarryingValue',
-        'CashCashEquivalentsAndShortTermInvestments',
-        'Cash',
-    ],
-    'Net Cash from Operating Activities': [
-        'NetCashProvidedByUsedInOperatingActivities',
-        'NetCashProvidedByUsedInOperatingActivitiesContinuingOperations',
-    ],
-    'Change in Fixed Assets & Intangibles': [
-        'PaymentsToAcquirePropertyPlantAndEquipment',
-        'PaymentsToAcquireProductiveAssets',
-        'CapitalExpenditureDiscontinuedOperations',
-    ],
-    'Shares (Diluted)': [
-        'WeightedAverageNumberOfDilutedSharesOutstanding',
-        'EntityCommonStockSharesOutstanding',
-    ],
-    'Shares (Basic)': [
-        'WeightedAverageNumberOfShareOutstandingBasicAndDiluted',
-        'WeightedAverageNumberOfSharesOutstandingBasic',
-        'CommonStockSharesOutstanding',
-    ],
-}
-
-# Balance sheet fields are point-in-time (any filing period is ok).
-# Income/cash flow fields need quarterly duration (~90 days).
-BALANCE_SHEET_FIELDS = {
-    'Total Assets', 'Total Liabilities', 'Total Equity',
-    'Total Current Assets', 'Total Current Liabilities',
-    'Cash, Cash Equivalents & Short Term Investments',
-    'Total Debt',
-    'Shares (Diluted)', 'Shares (Basic)',
-}
-
-# SimFin core fields (must match for build_quarterly_row compatibility)
-SIMFIN_INCOME_FIELDS = [
-    'Revenue', 'Gross Profit', 'Operating Income (Loss)',
-    'Net Income', 'Interest Expense, Net',
-]
-SIMFIN_BALANCE_FIELDS = [
-    'Total Assets', 'Total Equity', 'Total Liabilities', 'Total Debt',
-    'Total Current Assets', 'Total Current Liabilities',
-    'Cash, Cash Equivalents & Short Term Investments',
-    'Shares (Diluted)', 'Shares (Basic)',
-]
-SIMFIN_CASHFLOW_FIELDS = [
-    'Net Cash from Operating Activities',
-    'Change in Fixed Assets & Intangibles',
-]
-
-ALL_CORE_FIELDS = set(SIMFIN_INCOME_FIELDS + SIMFIN_BALANCE_FIELDS + SIMFIN_CASHFLOW_FIELDS)
+from config import (
+    SEC_HEADERS, SEC_RATE_DELAY, EDGAR_MAPPING_VERSION,
+    XBRL_TO_FIELD, BALANCE_SHEET_FIELDS, ALL_CORE_FIELDS,
+    SIMFIN_INCOME_FIELDS, SIMFIN_BALANCE_FIELDS, SIMFIN_CASHFLOW_FIELDS,
+)
 
 
 # ═══════════════════════════════════════════════════════════════
 # CIK Lookup
 # ═══════════════════════════════════════════════════════════════
 
-def load_cik_map(cache_dir='data/'):
-    """Load or download SEC ticker→CIK mapping. Refresh if >30 days old."""
+def load_cik_map(cache_dir: str = 'data/') -> Dict[str, str]:
+    """Load or download SEC ticker->CIK mapping. Refresh if >30 days old."""
     path = os.path.join(cache_dir, 'sec_cik_map.json')
     if os.path.exists(path):
         age_days = (time.time() - os.path.getmtime(path)) / 86400
@@ -185,7 +68,7 @@ def _fetch_company_facts(cik):
 # Quarterly Parsing
 # ═══════════════════════════════════════════════════════════════
 
-def parse_edgar_facts(facts_json, ticker):
+def parse_edgar_facts(facts_json: dict, ticker: str) -> Dict[tuple, dict]:
     """Extract quarterly financial data from EDGAR company facts.
 
     Returns dict: {(ticker, end_date_str): {field: value, 'filed': date_str}}
@@ -349,8 +232,8 @@ def extract_filing_metadata(all_quarterly_data):
 # Main EDGAR pipeline
 # ═══════════════════════════════════════════════════════════════
 
-# Bump this when XBRL_TO_FIELD or parse logic changes to force re-parse
-_MAPPING_VERSION = 4
+# Mapping version imported from config.EDGAR_MAPPING_VERSION
+_MAPPING_VERSION = EDGAR_MAPPING_VERSION
 
 
 def _load_raw_json_cache(cache_dir='data/'):
@@ -446,7 +329,8 @@ def save_edgar_cache(all_data, cache_dir='data/'):
         f.write(str(_MAPPING_VERSION))
 
 
-def fetch_edgar_fundamentals(tickers_to_fetch, cik_map, cache_dir='data/'):
+def fetch_edgar_fundamentals(tickers_to_fetch: List[str], cik_map: Dict[str, str],
+                             cache_dir: str = 'data/') -> Dict[tuple, dict]:
     """Fetch EDGAR data for a list of tickers.
 
     Caches raw JSON separately so mapping changes can re-parse without
@@ -522,7 +406,11 @@ def fetch_edgar_fundamentals(tickers_to_fetch, cik_map, cache_dir='data/'):
     return all_data
 
 
-def merge_edgar_into_simfin(df_inc, df_bal, df_cf, edgar_data, sector_map):
+def merge_edgar_into_simfin(
+        df_inc: pd.DataFrame, df_bal: pd.DataFrame, df_cf: pd.DataFrame,
+        edgar_data: Dict[tuple, dict],
+        sector_map: Dict[str, str],
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict]:
     """Merge EDGAR data into SimFin DataFrames.
 
     - EDGAR-only tickers: add as new rows to ALL three frames
@@ -679,7 +567,7 @@ def _sic_to_sector(sic):
 # Data QA
 # ═══════════════════════════════════════════════════════════════
 
-def edgar_field_diagnostic(edgar_data):
+def edgar_field_diagnostic(edgar_data: Dict[tuple, dict]) -> None:
     """Print per-field null rates across all EDGAR quarters.
 
     Helps diagnose XBRL mapping coverage after parse changes.
@@ -729,7 +617,9 @@ def edgar_field_diagnostic(edgar_data):
     print(f"  ═══ END EDGAR DIAGNOSTIC ═══\n")
 
 
-def run_data_qa(df_inc, df_bal, df_cf, edgar_data, sp_tickers):
+def run_data_qa(df_inc: pd.DataFrame, df_bal: pd.DataFrame,
+                df_cf: pd.DataFrame, edgar_data: Dict[tuple, dict],
+                sp_tickers: Set[str]) -> dict:
     """Comprehensive data quality audit after merge."""
     print("\n  ═══ DATA QA ═══")
 
@@ -793,7 +683,8 @@ def run_data_qa(df_inc, df_bal, df_cf, edgar_data, sp_tickers):
     }
 
 
-def run_feature_qa(df_dev, df_hold, edgar_tickers, fcols_q):
+def run_feature_qa(df_dev: pd.DataFrame, df_hold: pd.DataFrame,
+                   edgar_tickers: Set[str], fcols_q: List[str]) -> dict:
     """Feature quality audit after feature engineering."""
     print("\n  ═══ FEATURE QA ═══")
 

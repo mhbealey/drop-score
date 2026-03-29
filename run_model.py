@@ -22,17 +22,19 @@ from config import (
     TRADING_TARGET, TRADING_HOLD, ENTRY_MODE,
     BORROW_RATE_EASY, BORROW_RATE_HARD,
     UNIVERSE_A_FEATURES, UNIVERSE_B_FEATURES,
-    SECTOR_ETFS,
+    SECTOR_ETFS, BENCHMARKS,
 )
 from utils import elapsed, ensure_series
 from data import get_sp_index_tickers
 from model import run_bayesian_optimization, run_bootstrap_ci
 from walkforward import run_walkforward_ab
 
-# v18 benchmarks
+# v18 benchmarks from config.BenchmarkGates
 V18_A = {
-    'tickers': 960, 'dev_auc': 0.791, 'hold_auc': 0.777,
-    'top25_trades': 75, 'top25_win': 0.71, 'top25_pnl': 1.98,
+    'tickers': BENCHMARKS.v18_tickers,
+    'dev_auc': BENCHMARKS.v18_dev_auc, 'hold_auc': BENCHMARKS.v18_hold_auc,
+    'top25_trades': BENCHMARKS.v18_top25_trades,
+    'top25_win': BENCHMARKS.v18_top25_win, 'top25_pnl': BENCHMARKS.v18_top25_pnl,
 }
 V18_B = {
     'tickers': 231, 'dev_auc': 0.725, 'hold_auc': 0.718,

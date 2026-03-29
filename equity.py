@@ -3,6 +3,8 @@ Equity curve simulation with sequential position filling, dynamic regime check,
 tiered borrow costs, 2% max loss cap. Paper trade scenarios. Diagnostics.
 """
 import os, time
+from typing import Any, Dict, List, Optional
+
 import numpy as np
 import pandas as pd
 import yfinance as yf
@@ -14,9 +16,12 @@ from config import (
 from utils import elapsed, to_scalar, ensure_series
 
 
-def run_equity_sim(trades_df, start_bal, pos_size, max_pos, label,
-                   spy_regime_pct=None, spy_close=None, price_dict=None):
-    """Sequential equity sim. Returns dict of results."""
+def run_equity_sim(trades_df: pd.DataFrame, start_bal: int, pos_size: int,
+                   max_pos: int, label: str,
+                   spy_regime_pct: Optional[float] = None,
+                   spy_close: Optional[pd.Series] = None,
+                   price_dict: Optional[dict] = None) -> Optional[dict]:
+    """Sequential equity sim. Returns dict of results or None if too few trades."""
     if len(trades_df) < 5:
         return None
     ws = trades_df.sort_values(
@@ -168,7 +173,7 @@ def run_equity_sim(trades_df, start_bal, pos_size, max_pos, label,
     }
 
 
-def run_equity_scenarios(data_bundle):
+def run_equity_scenarios(data_bundle: dict) -> dict:
     """Run all equity scenarios, ramp-up, diagnostics, and plots."""
     t0 = time.time()
     print("=" * 70)

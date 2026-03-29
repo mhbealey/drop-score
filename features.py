@@ -3,6 +3,8 @@ Feature engineering, cached intermediates loading,
 voladj outcome recompute if missing, target selection.
 """
 import sys, time, pickle
+from typing import Any, Dict, List, Optional, Tuple
+
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -32,7 +34,8 @@ def _safe_scalar(val):
     return val
 
 
-def recompute_outcomes(df, price_dict, spy_close):
+def recompute_outcomes(df: pd.DataFrame, price_dict: dict,
+                       spy_close: Optional[pd.Series]) -> pd.DataFrame:
     """Recompute forward-return and vol-adjusted outcomes for a dataframe."""
     chunks = []
     for tk, grp in tqdm(df.groupby('ticker'), desc=f"  Outcomes"):
@@ -303,8 +306,12 @@ def _add_sector_relative(row, tk, price_dict, sector_etf_ret):
         pass
 
 
-def build_features_from_scratch(data_bundle):
-    """Build quarterly features from SimFin + EDGAR + price data."""
+def build_features_from_scratch(data_bundle: dict) -> Tuple[
+        pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Build quarterly features from SimFin + EDGAR + price data.
+
+    Returns (df_q, df_dev, df_hold, df_daily).
+    """
     print("FEATURES: building from scratch...")
 
     df_inc = data_bundle['df_inc']
@@ -458,9 +465,9 @@ def build_features_from_scratch(data_bundle):
     return df_q, df_dev, df_hold, df_daily
 
 
-def prepare_features(data_bundle):
-    """
-    Process cached intermediates or build from scratch.
+def prepare_features(data_bundle: dict) -> dict:
+    """Process cached intermediates or build from scratch.
+
     Identify feature / outcome columns, recompute voladj outcomes if missing,
     select targets. Returns updated data_bundle with feature metadata.
     """

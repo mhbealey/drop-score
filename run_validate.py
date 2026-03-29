@@ -16,20 +16,18 @@ _log_path, _log_file = setup_logging('validate')
 
 from config import (
     t_start, TRADING_TARGET, TRADING_HOLD, ENTRY_MODE,
-    UNIVERSE_A_FEATURES,
+    UNIVERSE_A_FEATURES, BENCHMARKS,
 )
 from utils import elapsed
 
-# ═══════════════════════════════════════════════════════════════
-# v18 pinned benchmarks — DO NOT CHANGE
-# ═══════════════════════════════════════════════════════════════
+# v18 pinned benchmarks from config.BenchmarkGates
 V18 = {
-    'tickers': 960,
-    'dev_auc': 0.791,
-    'hold_auc': 0.777,
-    'top25_trades': 75,
-    'top25_win': 0.71,
-    'top25_pnl': 1.98,
+    'tickers': BENCHMARKS.v18_tickers,
+    'dev_auc': BENCHMARKS.v18_dev_auc,
+    'hold_auc': BENCHMARKS.v18_hold_auc,
+    'top25_trades': BENCHMARKS.v18_top25_trades,
+    'top25_win': BENCHMARKS.v18_top25_win,
+    'top25_pnl': BENCHMARKS.v18_top25_pnl,
 }
 
 
@@ -99,9 +97,9 @@ def main():
     gates_passed = True
 
     checks = [
-        ('Dev AUC', m['dev_auc'], V18['dev_auc'] - 0.05),
-        ('Hold AUC', m['hold_auc'], V18['hold_auc'] - 0.10),
-        ('Trade count', m['top25_trades'], 15),  # at least 15 top-25% trades
+        ('Dev AUC', m['dev_auc'], BENCHMARKS.min_dev_auc),
+        ('Hold AUC', m['hold_auc'], BENCHMARKS.min_hold_auc),
+        ('Trade count', m['top25_trades'], BENCHMARKS.min_top25_trades),
     ]
 
     for name, actual, minimum in checks:

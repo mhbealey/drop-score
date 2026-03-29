@@ -4,10 +4,12 @@ confirmation entry, rule-based filters, sector cap, regime filter,
 volume-based borrow costs, and conviction tiers.
 """
 import time
+from collections import Counter
+from typing import Any, Dict, List, Optional, Set, Tuple
+
 import numpy as np
 import pandas as pd
 import xgboost as xgb
-from collections import Counter
 from tqdm import tqdm
 
 from config import (
@@ -243,8 +245,8 @@ def _generate_trades(scored_quarters, hold_days, price_dict,
     return all_trades
 
 
-def _tier_stats(wf_df):
-    """Compute conviction tier statistics."""
+def _tier_stats(wf_df: pd.DataFrame) -> Dict[str, dict]:
+    """Compute conviction tier statistics for Top 10/25/50% and Full."""
     if len(wf_df) < 20:
         return {}
     tiers = {}
@@ -271,7 +273,7 @@ def _tier_stats(wf_df):
     return tiers
 
 
-def run_walkforward(data_bundle):
+def run_walkforward(data_bundle: dict) -> dict:
     """Run walk-forward locked to TRADING_TARGET / TRADING_HOLD / ENTRY_MODE."""
     t0 = time.time()
     print("=" * 70)
@@ -380,7 +382,8 @@ def run_walkforward(data_bundle):
     return data_bundle
 
 
-def run_walkforward_ab(data_bundle, xgb_override, label="Bayesian"):
+def run_walkforward_ab(data_bundle: dict, xgb_override: dict,
+                       label: str = "Bayesian") -> Tuple[pd.DataFrame, dict]:
     """Run walk-forward with custom XGB params for A/B comparison.
 
     Returns (wf_df, tiers) without modifying data_bundle.

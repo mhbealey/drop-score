@@ -4,6 +4,8 @@ Pareto optimisation, fundamental-only tests, truncated holdout,
 score dev & holdout.
 """
 import time
+from typing import Any, Dict, List, Optional, Tuple
+
 import numpy as np
 import pandas as pd
 import xgboost as xgb
@@ -15,7 +17,9 @@ from config import N_FOLDS, N_BOOT, MIN_K, TRADING_TARGET, TRADING_HOLD, ENTRY_M
 from utils import clean_X, elapsed
 
 
-def run_model(dframe, fc, tgt, meds, nf=4, nb=500, k=10, optuna_params=None):
+def run_model(dframe: pd.DataFrame, fc: List[str], tgt: str, meds: pd.Series,
+              nf: int = 4, nb: int = 500, k: int = 10,
+              optuna_params: Optional[dict] = None) -> Optional[dict]:
     vd2 = dframe.dropna(subset=[tgt])
     X = clean_X(vd2, fc, meds)
     y = vd2[tgt].fillna(0).astype(int)
@@ -119,8 +123,9 @@ def run_model(dframe, fc, tgt, meds, nf=4, nb=500, k=10, optuna_params=None):
             'folds': folds, 'pred_map': pred_map}
 
 
-def pareto_optimise(df_dev, fcols_q, fill_meds_q, tcols):
-    """Pareto feature-count optimisation and return optimal K."""
+def pareto_optimise(df_dev: pd.DataFrame, fcols_q: List[str],
+                    fill_meds_q: pd.Series, tcols: List[str]) -> int:
+    """Pareto feature-count optimisation. Returns optimal K."""
     pt = [c for c in tcols if 'exdrop_5_10d' in c]
     if not pt:
         pt = [c for c in tcols if c.startswith('exdrop_')]
@@ -159,9 +164,12 @@ def pareto_optimise(df_dev, fcols_q, fill_meds_q, tcols):
     return K
 
 
-def train_all_targets(df_dev, fcols_q, fill_meds_q, tcols, tgt_rates, K,
-                      optuna_params=None):
-    """Train models on all targets. Print results. Return v_results, best info."""
+def train_all_targets(df_dev: pd.DataFrame, fcols_q: List[str],
+                      fill_meds_q: pd.Series, tcols: List[str],
+                      tgt_rates: Dict[str, float], K: int,
+                      optuna_params: Optional[dict] = None,
+) -> Tuple[dict, str, dict, List[str]]:
+    """Train models on all targets. Returns (v_results, best_v_t, best_v_r, topf_v)."""
     t0 = time.time()
     label = "VULNERABILITY MODEL"
     if optuna_params:
@@ -295,9 +303,8 @@ def truncated_holdout_test(df_dev, df_hold, Xh, fcols_q, fill_meds_q,
                 print(f"    Truncated holdout error: {e}")
 
 
-def run_vulnerability_model(data_bundle):
-    """
-    Full vulnerability model pipeline: Pareto, train, fundamental tests,
+def run_vulnerability_model(data_bundle: dict) -> dict:
+    """Full vulnerability model pipeline: Pareto, train, fundamental tests,
     score, truncated holdout.
 
     If 'locked_features' is set in the bundle, skip Pareto and use those
@@ -358,7 +365,8 @@ def run_vulnerability_model(data_bundle):
     return data_bundle
 
 
-def run_bayesian_optimization(data_bundle, n_trials=30, timeout=1200):
+def run_bayesian_optimization(data_bundle: dict, n_trials: int = 30,
+                              timeout: int = 1200) -> dict:
     """Bayesian hyperparameter optimization using Optuna.
 
     Optimizes on walk-forward Sharpe ratio, not dev AUC.
@@ -473,7 +481,7 @@ def run_bayesian_optimization(data_bundle, n_trials=30, timeout=1200):
     return data_bundle
 
 
-def run_bootstrap_ci(wf_top, n_boot=1000):
+def run_bootstrap_ci(wf_top: pd.DataFrame, n_boot: int = 1000) -> dict:
     """Bootstrap confidence intervals on walk-forward results."""
     if wf_top is None or len(wf_top) == 0:
         return {}

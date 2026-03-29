@@ -1,9 +1,10 @@
 """
 Shared pipeline functions used by run_validate.py and run_model.py.
-Extracted from main.py — same logic, no model/feature/config changes.
+Extracted from main.py -- same logic, no model/feature/config changes.
 """
 import os, sys, time, warnings
 from datetime import datetime
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 import pandas as pd
@@ -30,7 +31,7 @@ class Tee:
             s.flush()
 
 
-def setup_logging(prefix='run'):
+def setup_logging(prefix: str = 'run') -> Tuple[str, Any]:
     """Set up stdout tee to results/ log file. Returns (log_path, log_file)."""
     os.makedirs('results', exist_ok=True)
     log_path = os.path.join('results', f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
@@ -39,14 +40,16 @@ def setup_logging(prefix='run'):
     return log_path, log_file
 
 
-def teardown_logging(log_file, log_path):
+def teardown_logging(log_file: Any, log_path: str) -> None:
     """Restore stdout and close log file."""
     print(f"\nLog saved to {log_path}")
     sys.stdout = sys.__stdout__
     log_file.close()
 
 
-def run_pipeline(data_bundle, label, ticker_subset=None, locked_features=None):
+def run_pipeline(data_bundle: dict, label: str,
+                 ticker_subset: Optional[set] = None,
+                 locked_features: Optional[List[str]] = None) -> dict:
     """Run model + walk-forward + equity for a universe subset.
 
     If ticker_subset is given, filters df_dev/df_hold to those tickers
@@ -86,7 +89,7 @@ def run_pipeline(data_bundle, label, ticker_subset=None, locked_features=None):
     return bundle
 
 
-def holdout_eval(bundle, label=""):
+def holdout_eval(bundle: dict, label: str = "") -> Dict[str, float]:
     """Evaluate holdout on TRADING_TARGET. Returns dict of AUCs."""
     if label:
         print(f"\n  HOLDOUT ({label}):")
@@ -129,7 +132,7 @@ def holdout_eval(bundle, label=""):
     return results
 
 
-def get_pipeline_metrics(result):
+def get_pipeline_metrics(result: dict) -> dict:
     """Extract standard metrics from a pipeline result for comparison."""
     dev_auc = result.get('v_results', {}).get(TRADING_TARGET, {}).get('mauc', np.nan)
 
