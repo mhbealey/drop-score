@@ -200,26 +200,46 @@ def test0_extend_backtest(data):
         log.info("  WARNING: Could not fetch extended SPY")
 
     # --- Step 4: Merge into combined dataset ---
-    def _dedup_index(df):
-        """Drop duplicate index entries from a DataFrame or Series."""
-        if hasattr(df, 'index') and df.index.duplicated().any():
-            return df[~df.index.duplicated(keep='last')]
-        return df
+    def _dedup_px(px):
+        """Deduplicate index on a DataFrame or Series."""
+        if isinstance(px, pd.DataFrame) and px.index.duplicated().any():
+            return px[~px.index.duplicated(keep='last')]
+        if isinstance(px, pd.Series) and px.index.duplicated().any():
+            return px[~px.index.duplicated(keep='last')]
+        return px
 
+    # Merge extended and existing prices
     full_price_dict = dict(existing_price_dict)
-    for tk in extended_prices:
+    for tk in set(list(extended_prices.keys()) + list(full_price_dict.keys())):
+        frames = []
+        if tk in extended_prices:
+            px = extended_prices[tk]
+            if isinstance(px, pd.DataFrame):
+                px = px[~px.index.duplicated(keep='last')]
+            elif isinstance(px, pd.Series):
+                px = px[~px.index.duplicated(keep='last')]
+            frames.append(px)
         if tk in full_price_dict:
-            ext_px = _dedup_index(extended_prices[tk])
-            cur_px = _dedup_index(full_price_dict[tk])
-            combined = pd.concat([ext_px, cur_px])
+            px = full_price_dict[tk]
+            if isinstance(px, pd.DataFrame):
+                px = px[~px.index.duplicated(keep='last')]
+            elif isinstance(px, pd.Series):
+                px = px[~px.index.duplicated(keep='last')]
+            frames.append(px)
+        if len(frames) == 1:
+            full_price_dict[tk] = frames[0]
+        elif len(frames) == 2:
+            # Ensure same columns before concat
+            if isinstance(frames[0], pd.DataFrame) and isinstance(frames[1], pd.DataFrame):
+                common_cols = list(set(frames[0].columns) & set(frames[1].columns))
+                if common_cols:
+                    combined = pd.concat([frames[0][common_cols], frames[1][common_cols]])
+                else:
+                    combined = pd.concat(frames)
+            else:
+                combined = pd.concat(frames)
             combined = combined[~combined.index.duplicated(keep='last')].sort_index()
             full_price_dict[tk] = combined
-        else:
-            full_price_dict[tk] = _dedup_index(extended_prices[tk])
-
-    # Deduplicate all existing prices too (some have duplicate dates from yFinance)
-    for tk in list(full_price_dict.keys()):
-        full_price_dict[tk] = _dedup_index(full_price_dict[tk])
 
     # Merge SPY
     existing_spy = _dedup_index(data['spy_close'])
