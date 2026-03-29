@@ -229,6 +229,13 @@ def test0_extend_backtest(data):
         if len(frames) == 1:
             full_price_dict[tk] = frames[0]
         elif len(frames) == 2:
+            # DEBUG: diagnose the crash — print and exit
+            import sys as _dbg_sys
+            print(f"  DEBUG: frames[0] type={type(frames[0])}, shape={frames[0].shape}, dupes={frames[0].index.duplicated().sum()}")
+            print(f"  DEBUG: frames[1] type={type(frames[1])}, shape={frames[1].shape}, dupes={frames[1].index.duplicated().sum()}")
+            print(f"  DEBUG: frames[0] columns={list(frames[0].columns)}")
+            print(f"  DEBUG: frames[1] columns={list(frames[1].columns)}")
+            _dbg_sys.exit(1)
             # Ensure same columns before concat
             if isinstance(frames[0], pd.DataFrame) and isinstance(frames[1], pd.DataFrame):
                 common_cols = list(set(frames[0].columns) & set(frames[1].columns))
