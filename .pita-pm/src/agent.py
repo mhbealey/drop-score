@@ -48,6 +48,13 @@ PITA-PM — COMMAND REFERENCE
     market stats      How much data I've accumulated while you weren't looking.
     market report     Show latest sector scores.
 
+  DAEMON (autonomous mode):
+    daemon            Start daemon in foreground (Ctrl+C to stop).
+    daemon start      Same as above.
+    daemon start --bg Start daemon in background (detached).
+    daemon stop       Stop a running background daemon.
+    daemon status     Check if daemon is running.
+
   INTEGRATION:
     gate              Run as a quality gate — returns exit code 1 if
                       vibe score drops below threshold (default: 40).
@@ -189,6 +196,44 @@ def cmd_version(args: list) -> int:
     return 0
 
 
+def cmd_daemon(args: list) -> int:
+    """Manage the autonomous daemon."""
+    from .daemon import run_daemon, stop_daemon, daemon_status
+
+    if not args or args[0] == 'start':
+        bg = '--bg' in args or '--background' in args
+        if bg:
+            # Fork to background
+            pid = os.fork()
+            if pid > 0:
+                print(f"PITA-PM daemon started in background (PID {pid})")
+                print("  Run 'python pita_pm.py daemon stop' to stop it.")
+                print("  Logs: .pita-pm/reports/daemon_*.log")
+                return 0
+            else:
+                # Child process — detach
+                os.setsid()
+                sys.stdin = open(os.devnull, 'r')
+                sys.stdout = open(os.devnull, 'w')
+                sys.stderr = open(os.devnull, 'w')
+                run_daemon(PROJECT_ROOT, background=True)
+                return 0
+        else:
+            print("PITA-PM daemon starting in foreground (Ctrl+C to stop)...")
+            run_daemon(PROJECT_ROOT)
+            return 0
+    elif args[0] == 'stop':
+        print(stop_daemon())
+        return 0
+    elif args[0] == 'status':
+        print(daemon_status())
+        return 0
+    else:
+        print(f"Unknown daemon command: {args[0]}")
+        print("Usage: daemon [start|stop|status] [--bg]")
+        return 1
+
+
 COMMANDS = {
     'scan': cmd_scan,
     'standup': cmd_standup,
@@ -197,6 +242,7 @@ COMMANDS = {
     'shift': cmd_shift,
     'market': cmd_market,
     'gate': cmd_gate,
+    'daemon': cmd_daemon,
     'help': cmd_help,
     'version': cmd_version,
 }

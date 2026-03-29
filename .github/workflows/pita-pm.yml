@@ -1,0 +1,100 @@
+name: PITA-PM Autonomous Shift
+
+on:
+  # Every 30 minutes during "on-shift" hours (06:00-14:00 UTC)
+  schedule:
+    - cron: '*/30 6-13 * * *'    # On-shift: scan every 30 min
+    - cron: '0 14-23,0-5 * * *'  # Off-shift: market crawl every hour
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Mode: scan, market, standup, sins, gate'
+        type: choice
+        options: [scan, market, standup, sins, gate]
+        default: scan
+
+permissions:
+  contents: read
+
+jobs:
+  pita-pm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Restore PITA-PM's memory (sin ledger + market data)
+      - name: Restore PITA-PM data
+        uses: actions/cache@v4
+        with:
+          path: .pita-pm/data/
+          key: pita-pm-data-${{ github.run_number }}
+          restore-keys: pita-pm-data-
+
+      - name: Determine mode
+        id: mode
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "mode=${{ inputs.mode }}" >> $GITHUB_OUTPUT
+          else
+            # Check if we're in on-shift hours (06-13 UTC)
+            HOUR=$(date -u +%H)
+            if [ "$HOUR" -ge 6 ] && [ "$HOUR" -lt 14 ]; then
+              echo "mode=scan" >> $GITHUB_OUTPUT
+            else
+              echo "mode=market" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      - name: Run PITA-PM
+        run: |
+          MODE="${{ steps.mode.outputs.mode }}"
+          echo "Running PITA-PM in $MODE mode..."
+          echo ""
+
+          python -c "
+          import sys
+          sys.path.insert(0, '.pita-pm')
+
+          mode = '$MODE'
+
+          if mode == 'scan':
+              from src.shift_runner import run_scan
+              print(run_scan('.'))
+
+          elif mode == 'standup':
+              from src.shift_runner import start_shift
+              print(start_shift('.'))
+
+          elif mode == 'market':
+              from src.market_crawler import run_sleep_mode
+              print(run_sleep_mode())
+
+          elif mode == 'sins':
+              from src.shift_runner import get_sins_report
+              print(get_sins_report())
+
+          elif mode == 'gate':
+              from src.scanner import scan_codebase
+              from src.personality import vibe_check
+              report = scan_codebase('.')
+              vibe = report.vibe_score
+              label, quip = vibe_check(vibe)
+              print(f'Vibe: {vibe:.0f}/100 — {label}')
+              print(quip)
+              print(f'Issues: {report.total_issues}')
+              if vibe < 30:
+                  sys.exit(1)
+          "
+
+      - name: Upload PITA-PM report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pita-pm-${{ steps.mode.outputs.mode }}-${{ github.run_number }}
+          path: .pita-pm/reports/
+          retention-days: 30
