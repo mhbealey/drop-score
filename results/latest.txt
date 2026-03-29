@@ -68,11 +68,11 @@ DATA...
   S&P in universe after EDGAR: 803/971
   Cache: 3103 prices | 94 unavailable | 0 to download
   Training: 3103 stocks | Tradeable: 642 for walk-forward (2461 delisted with history)
-  [24m10s]
+  [22m2s]
 
 FEATURES: building from scratch...
   Raw quarterly rows: 61,322
   Filing delay: 16,965 rows with data
   After filtering: 60,194 rows, 3096 tickers
-  Dev: 60,167 | Hold: 27 (cutoff: 2025-07-31)
+  Dev: 50,552 | Hold: 9,642 (cutoff: 2024-06-30)
   Computing outcomes...
