@@ -200,7 +200,7 @@ def test0_extend_backtest(data):
         log.info("  WARNING: Could not fetch extended SPY")
 
     # --- Step 4: Merge into combined dataset ---
-    def _dedup_px(px):
+    def _dedup_index(px):
         """Deduplicate index on a DataFrame or Series."""
         if isinstance(px, pd.DataFrame) and px.index.duplicated().any():
             return px[~px.index.duplicated(keep='last')]
