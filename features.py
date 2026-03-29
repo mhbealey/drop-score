@@ -495,6 +495,13 @@ def prepare_features(data_bundle: dict) -> dict:
         data_bundle['df_daily'] = df_daily
         data_bundle['intm_loaded'] = True
 
+    # Re-read locals after potential rebuild (build_features_from_scratch
+    # replaces the empty placeholders in data_bundle)
+    df_dev = data_bundle['df_dev']
+    df_hold = data_bundle['df_hold']
+    df_q = data_bundle['df_q']
+    df_daily = data_bundle['df_daily']
+
     log.info("FEATURES: processing...")
     ocols = set(c for c in df_dev.columns if any(c.startswith(p) for p in opfx))
     fcols_q = sorted([

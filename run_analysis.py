@@ -283,6 +283,9 @@ def test0_extend_backtest(data):
     sector_etf_ret = data.get('sector_etf_ret', {})
 
     # Build extended data bundle for feature engineering
+    # Note: df_dev/df_hold/df_q/df_daily are placeholders — prepare_features()
+    # checks intm_loaded and calls build_features_from_scratch() when False,
+    # but it reads these keys before the check, so they must exist.
     ext_bundle = {
         'df_inc': full_inc,
         'df_bal': full_bal,
@@ -300,6 +303,10 @@ def test0_extend_backtest(data):
         'edgar_filing_meta': data.get('edgar_filing_meta', {}),
         'tradeable_tickers': data.get('tradeable_tickers', set()),
         'sp_tickers': sp_tickers,
+        'df_dev': pd.DataFrame(),
+        'df_hold': pd.DataFrame(),
+        'df_q': pd.DataFrame(),
+        'df_daily': pd.DataFrame(),
     }
 
     # Build features
@@ -692,7 +699,6 @@ def main():
         log.info(f"  Could not load intermediates: {e}")
 
     # ── Run pipeline on existing data first (get current baseline) ──
-    from pipeline import run_pipeline, get_pipeline_metrics
     from model import run_vulnerability_model
 
     log.info("\n  Running vulnerability model on existing data (baseline)...")
