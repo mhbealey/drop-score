@@ -14,6 +14,17 @@ from config import (
 from utils import elapsed, get_col, to_scalar, ensure_series
 
 
+def _safe_get_loc(index, key):
+    """get_loc that always returns an int, even with duplicate dates."""
+    loc = index.get_loc(key)
+    if isinstance(loc, int):
+        return loc
+    if isinstance(loc, slice):
+        return loc.start
+    # boolean array or ndarray from duplicates
+    return int(np.argmax(loc))
+
+
 def recompute_outcomes(df, price_dict, spy_close):
     """Recompute forward-return and vol-adjusted outcomes for a dataframe."""
     chunks = []
@@ -45,7 +56,7 @@ def _outcomes(grp, pd_dict, spy_c):
         if len(vi) == 0:
             results.append(oc)
             continue
-        si = px.index.get_loc(vi[0])
+        si = _safe_get_loc(px.index, vi[0])
         sp_ = to_scalar(px.iloc[si])
         if sp_ <= 0:
             results.append(oc)
@@ -198,7 +209,7 @@ def _add_price_features(row, tk, price_dict, spy_close, ni, te, rev, fcf, sh):
     vi = px.index[px.index >= rd]
     if len(vi) == 0:
         return
-    si = px.index.get_loc(vi[0])
+    si = _safe_get_loc(px.index, vi[0])
     price = to_scalar(px.iloc[si])
     row['price'] = price
     row['market_cap'] = price * _safe(sh, 0)
@@ -272,7 +283,7 @@ def _add_sector_relative(row, tk, price_dict, sector_etf_ret):
         rd = row['report_date']
         vi = px.index[px.index >= rd]
         if len(vi) > 0:
-            si = px.index.get_loc(vi[0])
+            si = _safe_get_loc(px.index, vi[0])
             sec_ret = ensure_series(sector_etf_ret.get(sec))
             if sec_ret is not None and si >= 63:
                 stk_63 = to_scalar(px.iloc[si] / px.iloc[si-63] - 1)
@@ -399,7 +410,9 @@ def build_features_from_scratch(data_bundle):
     print(f"  After filtering: {len(df_q):,} rows, {df_q['ticker'].nunique()} tickers")
 
     # === Dev / Holdout split ===
-    cutoff = df_q['report_date'].max() - pd.DateOffset(months=HOLDOUT_MO)
+    # Use 95th percentile date (not max) to avoid EDGAR outlier dates skewing cutoff
+    cutoff_anchor = df_q['report_date'].quantile(0.95)
+    cutoff = cutoff_anchor - pd.DateOffset(months=HOLDOUT_MO)
     df_dev = df_q[df_q['report_date'] < cutoff].copy().reset_index(drop=True)
     df_hold = df_q[df_q['report_date'] >= cutoff].copy().reset_index(drop=True)
     print(f"  Dev: {len(df_dev):,} | Hold: {len(df_hold):,} (cutoff: {cutoff.date()})")
